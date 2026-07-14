@@ -90,13 +90,127 @@ describe('searchRepositoriesByTopic', () => {
   });
 
   it('should throw when the search request fails', async () => {
-    const fetchFn = async () => new Response('rate limited', { status: 403 });
+    const fetchFn = async () => new Response('server error', { status: 500 });
     try {
       await searchRepositoriesByTopic({ topic: 'x', fetchFn, logger: silentLogger });
       expect.fail('should have thrown');
     } catch (e) {
+      expect(e.message).to.equal('GitHub repository search failed (HTTP 500)');
+    }
+  });
+
+  it('should throw immediately on a 403 without rate-limit headers, without sleeping', async () => {
+    const sleeps = [];
+    const fetchFn = async () => new Response('forbidden', { status: 403 });
+    try {
+      await searchRepositoriesByTopic({ topic: 'x', fetchFn, logger: silentLogger, sleepFn: (ms) => sleeps.push(ms) });
+      expect.fail('should have thrown');
+    } catch (e) {
       expect(e.message).to.equal('GitHub repository search failed (HTTP 403)');
     }
+    expect(sleeps).to.deep.equal([]);
+  });
+
+  it('should retry a rate-limited 403 honoring Retry-After, then succeed', async () => {
+    const sleeps = [];
+    const responses = [
+      new Response('rate limited', { status: 403, headers: { 'retry-after': '7', 'x-ratelimit-remaining': '0' } }),
+      new Response(JSON.stringify({ items: [searchItem('john', 'demo')] })),
+    ];
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: silentLogger,
+      sleepFn: (ms) => sleeps.push(ms),
+    });
+    expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['john/demo']);
+    expect(sleeps).to.deep.equal([7000]);
+  });
+
+  it('should cap the Retry-After delay at 60 seconds', async () => {
+    const sleeps = [];
+    const responses = [
+      new Response('rate limited', { status: 429, headers: { 'retry-after': '3600' } }),
+      new Response(JSON.stringify({ items: [] })),
+    ];
+    await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: silentLogger,
+      sleepFn: (ms) => sleeps.push(ms),
+    });
+    expect(sleeps).to.deep.equal([60000]);
+  });
+
+  it('should derive the delay from x-ratelimit-reset when Retry-After is absent', async () => {
+    const sleeps = [];
+    const responses = [
+      new Response('rate limited', {
+        status: 403,
+        headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1030' },
+      }),
+      new Response(JSON.stringify({ items: [] })),
+    ];
+    await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: silentLogger,
+      sleepFn: (ms) => sleeps.push(ms),
+      nowFn: () => 1000 * 1000,
+    });
+    expect(sleeps).to.deep.equal([30000]);
+  });
+
+  it('should fall back to a default delay when the reset time is in the past', async () => {
+    const sleeps = [];
+    const responses = [
+      new Response('rate limited', {
+        status: 403,
+        headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '900' },
+      }),
+      new Response(JSON.stringify({ items: [] })),
+    ];
+    await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: silentLogger,
+      sleepFn: (ms) => sleeps.push(ms),
+      nowFn: () => 1000 * 1000,
+    });
+    expect(sleeps).to.deep.equal([10000]);
+  });
+
+  it('should retry with the default sleep and clock when none are injected', async () => {
+    const responses = [
+      new Response('rate limited', { status: 429, headers: { 'retry-after': '0.001' } }),
+      new Response(JSON.stringify({ items: [] })),
+    ];
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: silentLogger,
+    });
+    expect(repositories).to.deep.equal([]);
+  });
+
+  it('should fail clearly once rate-limit retries are exhausted', async () => {
+    const sleeps = [];
+    const warnings = [];
+    const fetchFn = async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '1' } });
+    try {
+      await searchRepositoriesByTopic({
+        topic: 'x',
+        fetchFn,
+        logger: { warn: (message) => warnings.push(message) },
+        sleepFn: (ms) => sleeps.push(ms),
+      });
+      expect.fail('should have thrown');
+    } catch (e) {
+      expect(e.message).to.equal('GitHub repository search failed (HTTP 429)');
+    }
+    expect(sleeps).to.deep.equal([1000, 1000]);
+    expect(warnings).to.have.lengthOf(2);
+    expect(warnings[0]).to.include('rate limited');
   });
 });
 
