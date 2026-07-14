@@ -1,4 +1,11 @@
-import { COVER_DOWNLOAD_CAP_BYTES, MANIFEST_FILE_NAME, MANIFEST_MAX_BYTES } from './constants.js';
+import {
+  COVER_DOWNLOAD_CAP_BYTES,
+  COVER_MAX_BYTES,
+  MANIFEST_FILE_NAME,
+  MANIFEST_MAX_BYTES,
+  REQUEST_TIMEOUT_MS,
+} from './constants.js';
+import { isForbiddenHost } from './isForbiddenHost.js';
 
 const GITHUB_API_BASE_URL = 'https://api.github.com';
 const USER_AGENT = 'gladys-integration-store-indexer';
@@ -20,6 +27,35 @@ function buildApiHeaders(token) {
     headers.Authorization = `Bearer ${token}`;
   }
   return headers;
+}
+
+/**
+ * Read a response body in streaming, giving up as soon as it exceeds
+ * maxBytes — never buffer an attacker-sized body before checking its size.
+ * @param {Response} response - Fetch response.
+ * @param {number} maxBytes - Hard cap on the number of bytes read.
+ * @returns {Promise<{ok: true, data: Buffer}|{ok: false}>} Body, or ok:false when over the cap.
+ */
+async function readBodyWithCap(response, maxBytes) {
+  if (response.body === null) {
+    return { ok: true, data: Buffer.alloc(0) };
+  }
+  const chunks = [];
+  let totalLength = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(Buffer.from(value));
+    totalLength += value.length;
+    if (totalLength > maxBytes) {
+      await reader.cancel();
+      return { ok: false };
+    }
+  }
+  return { ok: true, data: Buffer.concat(chunks) };
 }
 
 /**
@@ -49,7 +85,10 @@ export async function searchRepositoriesByTopic({
     const url = `${GITHUB_API_BASE_URL}/search/repositories?q=${encodeURIComponent(
       `topic:${topic} is:public`,
     )}&per_page=${perPage}&page=${page}`;
-    const response = await fetchFn(url, { headers: buildApiHeaders(token) });
+    const response = await fetchFn(url, {
+      headers: buildApiHeaders(token),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(`GitHub repository search failed (HTTP ${response.status})`);
     }
@@ -92,56 +131,74 @@ export async function fetchManifestFile({ owner, repo, defaultBranch, fetchFn = 
   const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(
     defaultBranch,
   )}/${MANIFEST_FILE_NAME}`;
-  const response = await fetchFn(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (response.status === 404) {
-    return { status: 'not_found' };
+  try {
+    const response = await fetchFn(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (response.status === 404) {
+      return { status: 'not_found' };
+    }
+    if (!response.ok) {
+      return { status: 'error', reason: `download failed (HTTP ${response.status})` };
+    }
+    const body = await readBodyWithCap(response, MANIFEST_MAX_BYTES);
+    if (!body.ok) {
+      return { status: 'error', reason: `file too large (> ${MANIFEST_MAX_BYTES / 1024} KB)` };
+    }
+    return { status: 'ok', raw: body.data.toString('utf8') };
+  } catch (e) {
+    return { status: 'error', reason: `download failed (${e.message})` };
   }
-  if (!response.ok) {
-    return { status: 'error', reason: `download failed (HTTP ${response.status})` };
-  }
-  const raw = await response.text();
-  if (Buffer.byteLength(raw, 'utf8') > MANIFEST_MAX_BYTES) {
-    return { status: 'error', reason: `file too large (> ${MANIFEST_MAX_BYTES / 1024} KB)` };
-  }
-  return { status: 'ok', raw };
 }
 
 /**
- * Download a cover image, reading at most COVER_DOWNLOAD_CAP_BYTES: past that
- * point the cover is already way above the 150 KB contract, no need to keep
- * downloading an arbitrarily large file.
+ * Download a cover image. The URL comes straight from a third-party manifest,
+ * so it is treated as hostile: https only, no private/reserved destination,
+ * no redirect followed, 30 s timeout, and at most COVER_DOWNLOAD_CAP_BYTES
+ * read (past that the cover is already way above the 150 KB contract).
  * @param {object} options - Options.
  * @param {string} options.url - HTTPS URL of the cover.
  * @param {Function} [options.fetchFn] - fetch implementation, injectable for tests.
  * @returns {Promise<{status: 'ok', data: Buffer}|{status: 'error', reason: string}>} Result.
  */
 export async function downloadCover({ url, fetchFn = fetch }) {
-  let response;
+  let parsedUrl;
   try {
-    response = await fetchFn(url, { headers: { 'User-Agent': USER_AGENT } });
+    parsedUrl = new URL(url);
+  } catch {
+    return { status: 'error', reason: 'invalid URL' };
+  }
+  if (parsedUrl.protocol !== 'https:') {
+    return { status: 'error', reason: 'only https URLs are allowed' };
+  }
+  if (isForbiddenHost(parsedUrl.hostname)) {
+    return { status: 'error', reason: 'forbidden host (private or reserved address)' };
+  }
+  try {
+    const response = await fetchFn(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      return {
+        status: 'error',
+        reason: `redirect not followed (HTTP ${response.status}) — serve the cover from a direct URL`,
+      };
+    }
+    if (!response.ok) {
+      return { status: 'error', reason: `download failed (HTTP ${response.status})` };
+    }
+    const body = await readBodyWithCap(response, COVER_DOWNLOAD_CAP_BYTES);
+    if (!body.ok) {
+      return {
+        status: 'error',
+        reason: `expected ≤ ${COVER_MAX_BYTES / 1024} KB, got more than ${COVER_DOWNLOAD_CAP_BYTES / 1024} KB`,
+      };
+    }
+    return { status: 'ok', data: body.data };
   } catch (e) {
     return { status: 'error', reason: `download failed (${e.message})` };
   }
-  if (!response.ok) {
-    return { status: 'error', reason: `download failed (HTTP ${response.status})` };
-  }
-  const chunks = [];
-  let totalLength = 0;
-  const reader = response.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    chunks.push(Buffer.from(value));
-    totalLength += value.length;
-    if (totalLength > COVER_DOWNLOAD_CAP_BYTES) {
-      await reader.cancel();
-      return {
-        status: 'error',
-        reason: `expected ≤ 150 KB, got more than ${COVER_DOWNLOAD_CAP_BYTES / 1024} KB`,
-      };
-    }
-  }
-  return { status: 'ok', data: Buffer.concat(chunks) };
 }

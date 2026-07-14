@@ -21,6 +21,10 @@ export const PLACEHOLDER_COVER_FILE_NAME = 'placeholder.png';
 // A manifest is a small JSON file; anything bigger than this is not a manifest.
 export const MANIFEST_MAX_BYTES = 100 * 1024;
 
+// Timeout of every outbound HTTP request: a slow host must fail fast, not
+// hang the whole indexing run.
+export const REQUEST_TIMEOUT_MS = 30 * 1000;
+
 export const REJECTION_LEVELS = {
   // The integration is NOT indexed.
   ERROR: 'error',

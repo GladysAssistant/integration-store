@@ -85,6 +85,8 @@ The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/mani
 
 A missing or invalid **cover** never rejects an integration: it is indexed with a placeholder and a `level: "warning"` entry is published in `rejected.json`. Valid covers are **re-hosted** on GitHub Pages (no dead links in the catalog, no user IP leaked to third-party servers, guaranteed size and format).
 
+The cover URL must be **direct** (redirects are not followed) and point to a public host (private and reserved addresses are refused); requests time out after 30 seconds. A raw GitHub URL of a file in your own repository (`https://raw.githubusercontent.com/<owner>/<repo>/main/cover.jpg`) satisfies all of this.
+
 There is deliberately **no `permissions` field** in v1: outbound network access from an integration container is open and the Gladys installation screen says so — we do not specify what we cannot enforce.
 
 ## Published files
