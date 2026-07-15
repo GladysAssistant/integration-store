@@ -131,7 +131,7 @@ npm run lint          # eslint + prettier
 npm run build-index   # build dist/ for real (crawls GitHub)
 ```
 
-The indexer is plain Node.js (≥ 20), fully unit-tested against fixtures — network clients are injected, so the whole pipeline (validation, cover re-hosting, index generation) is tested deterministically offline.
+The indexer is plain Node.js (≥ 24), fully unit-tested against fixtures — network clients are injected, so the whole pipeline (validation, cover re-hosting, index generation) is tested deterministically offline.
 
 Configuration of `npm run build-index`, via environment variables:
 

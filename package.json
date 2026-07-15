@@ -10,7 +10,7 @@
     "url": "git+https://github.com/GladysAssistant/integration-store.git"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "build-index": "node src/cli.js",
