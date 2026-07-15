@@ -1,0 +1,52 @@
+# Rebuilds the store index and publishes it to a Cloudflare R2 bucket.
+#
+# 100% automated, zero human approval (B.9 of the external integrations plan):
+# publishing an integration = tagging a public GitHub repo with the
+# `gladys-assistant-integration` topic. This workflow crawls the topic every
+# hour, validates each manifest mechanically, and uploads index.json,
+# rejected.json, the canonical manifest.schema.json and the re-hosted covers
+# to R2 (S3-compatible object storage, served over a public URL / CDN).
+#
+# Required configuration (repository Settings → Secrets and variables → Actions):
+#   Variables: STORE_BASE_URL, R2_ACCOUNT_ID, R2_BUCKET
+#   Secrets:   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+name: Build and publish index
+
+on:
+  schedule:
+    - cron: '13 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and publish index to R2
+        run: npm run build-index
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORE_BASE_URL: ${{ vars.STORE_BASE_URL }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
