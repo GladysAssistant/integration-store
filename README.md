@@ -105,14 +105,16 @@ Everything is uploaded to the R2 bucket and served over its public URL (`<STORE_
 
 There is **no moderation in v1**: no blocklist, no manual removal. The real defenses are the strict Docker sandbox on the Gladys side, the explicit warning shown before installation, and the GitHub metadata (stars, repository age) visible in the catalog. A blocklist can be added later on the indexer side without touching any Gladys client.
 
-Files are uploaded to R2, never deleted: the freshly written `index.json`/`rejected.json` always reference the current covers, so a cover left behind by a removed integration is simply unreferenced (pruning is left out on purpose to keep the credentials write-only). The index and rejection documents are served with a short `Cache-Control` (they change on every crawl); covers and the schema are cached hard.
+Files are uploaded to R2, never deleted: the freshly written `index.json`/`rejected.json` always reference the current covers, so a cover left behind by a removed integration is simply unreferenced (pruning is left out on purpose, so the credentials never need delete rights). The index and rejection documents are served with a short `Cache-Control` (they change on every crawl); covers and the schema are cached hard.
+
+Uploads are also incremental: every crawl re-writes `index.json` and `rejected.json` (they change each time), but a cover or the schema is only re-uploaded when its bytes actually differ from what's already in the bucket (compared via a cheap `HEAD` on the object's ETag). Covers almost never change, so a steady-state crawl performs a near-constant number of writes regardless of how many integrations the store holds — which keeps the run comfortably inside R2's free write tier at any realistic scale.
 
 ## Hosting: Cloudflare R2
 
 The index is published to a **Cloudflare R2 bucket** through its S3-compatible API. To publish (repository Settings → Secrets and variables → Actions):
 
-- Create an R2 bucket and expose it publicly (a custom domain, or the bucket's `r2.dev` URL).
-- Create an R2 **API token** scoped to that bucket with object read/write.
+- Create an R2 bucket and expose it publicly — prefer a **custom domain on Cloudflare** over the bucket's raw `r2.dev` URL: the custom domain is CDN-cached (honouring the `Cache-Control` we set), so reads are served from the edge instead of hitting R2 on every request.
+- Create an R2 **API token** scoped to that bucket with object **read + write** (read is used to skip re-uploading unchanged covers; delete is never needed).
 - Set the variables and secrets listed under [Development](#development).
 
 The store stays forkable: point `STORE_BASE_URL` at your own bucket URL and the whole pipeline works unchanged. Switching object stores later is a one-file change — any S3-compatible provider works by overriding `R2_ENDPOINT`.

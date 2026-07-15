@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 /**
  * Content-Type to publish a file with, derived from its extension. Serving the
@@ -99,28 +100,101 @@ export function createR2PutObject({ client, bucket }) {
 }
 
 /**
- * Upload every file of a directory to an object store through an injected
- * putObject function. Objects are only PUT, never deleted: the freshly written
+ * Build a headObject function backed by an S3-compatible client and a bucket.
+ * It fetches an object's metadata (its ETag) so the uploader can skip
+ * re-uploading unchanged objects; a missing object resolves to `null` instead
+ * of throwing. HEAD is a cheap read (Class B on R2), traded against the more
+ * limited write budget (Class A).
+ * @param {object} options - Options.
+ * @param {S3Client} options.client - S3 client (createR2Client, or a fake in tests).
+ * @param {string} options.bucket - Target bucket name.
+ * @returns {Function} headObject({ key }) => Promise<{ etag: string } | null>.
+ */
+export function createR2HeadObject({ client, bucket }) {
+  return async ({ key }) => {
+    try {
+      const response = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return { etag: response.ETag };
+    } catch (error) {
+      if (error.name === 'NotFound' || error.name === 'NoSuchKey') {
+        return null;
+      }
+      throw error;
+    }
+  };
+}
+
+/**
+ * Objects rebuilt on every crawl: always uploaded without a HEAD probe, since
+ * their content changes each run (a `generated_at` timestamp, the integration
+ * set) and the probe would never spare a write.
+ * @param {string} key - Object key.
+ * @returns {boolean} True if the object must be re-uploaded unconditionally.
+ */
+function isAlwaysUpload(key) {
+  return key === 'index.json' || key === 'rejected.json';
+}
+
+/**
+ * Whether the object already stored under `etag` has the exact same bytes as
+ * `body`. R2 sets the ETag of a single-part upload to the hex MD5 of the object,
+ * so comparing that against the local MD5 is a reliable "unchanged" test. MD5 is
+ * used here as R2's content fingerprint, not for security. A missing or
+ * non-MD5 ETag simply fails the match and triggers a safe re-upload.
+ * @param {string|undefined} etag - Remote ETag (quoted), or undefined.
+ * @param {Buffer} body - Local file bytes.
+ * @returns {boolean} True if the remote object is byte-identical.
+ */
+function etagMatches(etag, body) {
+  if (!etag) {
+    return false;
+  }
+  return etag.replace(/"/g, '') === createHash('md5').update(body).digest('hex');
+}
+
+/**
+ * Upload a directory to an object store through an injected putObject function.
+ *
+ * When a headObject probe is provided, immutable objects (everything but the
+ * index/rejection documents) are only re-uploaded if their remote ETag differs
+ * from the local bytes. Covers change almost never, so this turns the dominant,
+ * per-integration write cost into a one-off: at steady state a crawl re-writes
+ * just index.json and rejected.json instead of every cover, keeping the write
+ * volume (Class A on R2) roughly constant regardless of the store size.
+ *
+ * Objects are only ever PUT, never deleted: the freshly written
  * index.json/rejected.json always reference the current covers, so leftover
  * covers of removed integrations are harmless (unreferenced) — pruning is left
- * out on purpose to keep the required credentials write-only.
+ * out on purpose so the credentials never need delete rights (read + write
+ * only, no delete).
  * @param {object} options - Options.
  * @param {string} options.dir - Local directory to publish (the build output).
  * @param {Function} options.putObject - Uploader ({ key, body, contentType, cacheControl }).
+ * @param {Function} [options.headObject] - Optional probe ({ key }) => { etag } | null; enables skip-if-unchanged.
  * @param {object} [options.logger] - Logger, console-compatible.
- * @returns {Promise<string[]>} The uploaded object keys, sorted.
+ * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Sorted keys, split by outcome.
  */
-export async function uploadDirectory({ dir, putObject, logger = console }) {
+export async function uploadDirectory({ dir, putObject, headObject, logger = console }) {
   const keys = (await listFiles(dir)).sort();
+  const uploaded = [];
+  const skipped = [];
   for (const key of keys) {
     const body = await readFile(path.join(dir, ...key.split('/')));
+    if (headObject && !isAlwaysUpload(key)) {
+      const head = await headObject({ key });
+      if (head && etagMatches(head.etag, body)) {
+        skipped.push(key);
+        continue;
+      }
+    }
     await putObject({
       key,
       body,
       contentType: contentTypeFor(key),
       cacheControl: cacheControlFor(key),
     });
+    uploaded.push(key);
   }
-  logger.log(`Uploaded ${keys.length} objects.`);
-  return keys;
+  logger.log(`Uploaded ${uploaded.length} objects (${skipped.length} unchanged).`);
+  return { uploaded, skipped };
 }

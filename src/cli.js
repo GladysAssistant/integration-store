@@ -1,7 +1,7 @@
 import { buildIndex } from './buildIndex.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
-import { createR2Client, createR2PutObject, uploadDirectory } from './uploadToR2.js';
+import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from './uploadToR2.js';
 import { writeOutput } from './writeOutput.js';
 
 const topic = process.env.STORE_TOPIC || STORE_TOPIC;
@@ -43,8 +43,11 @@ if (bucket) {
     endpoint: process.env.R2_ENDPOINT,
   });
   const putObject = createR2PutObject({ client, bucket });
-  await uploadDirectory({ dir: outputDir, putObject });
-  console.log(`Published ${outputDir}/ to R2 bucket "${bucket}" (public URL: ${storeBaseUrl}).`);
+  const headObject = createR2HeadObject({ client, bucket });
+  const { uploaded, skipped } = await uploadDirectory({ dir: outputDir, putObject, headObject });
+  console.log(
+    `Published ${outputDir}/ to R2 bucket "${bucket}" (${uploaded.length} uploaded, ${skipped.length} unchanged; public URL: ${storeBaseUrl}).`,
+  );
 } else {
   console.log('R2_BUCKET not set: skipping upload (local build only).');
 }
