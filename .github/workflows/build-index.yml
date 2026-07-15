@@ -1,13 +1,15 @@
-# Rebuilds and publishes the store index on GitHub Pages.
+# Rebuilds the store index and publishes it to a Cloudflare R2 bucket.
 #
 # 100% automated, zero human approval (B.9 of the external integrations plan):
 # publishing an integration = tagging a public GitHub repo with the
 # `gladys-assistant-integration` topic. This workflow crawls the topic every
-# hour, validates each manifest mechanically, and publishes index.json,
-# rejected.json, the canonical manifest.schema.json and the re-hosted covers.
+# hour, validates each manifest mechanically, and uploads index.json,
+# rejected.json, the canonical manifest.schema.json and the re-hosted covers
+# to R2 (S3-compatible object storage, served over a public URL / CDN).
 #
-# The store is forkable: STORE_BASE_URL is derived from the repository name,
-# so a fork publishes its own working index without any change.
+# Required configuration (repository Settings → Secrets and variables → Actions):
+#   Variables: STORE_BASE_URL, R2_ACCOUNT_ID, R2_BUCKET
+#   Secrets:   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 name: Build and publish index
 
 on:
@@ -21,14 +23,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: publish-index
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,32 +41,12 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Build index
+      - name: Build and publish index to R2
         run: npm run build-index
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STORE_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Setup Pages
-        # enablement: true creates the Pages site on first run, so a fresh
-        # repo (or a fork) needs zero manual configuration.
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          STORE_BASE_URL: ${{ vars.STORE_BASE_URL }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

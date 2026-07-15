@@ -1,6 +1,7 @@
 import { buildIndex } from './buildIndex.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
+import { createR2Client, createR2PutObject, uploadDirectory } from './uploadToR2.js';
 import { writeOutput } from './writeOutput.js';
 
 const topic = process.env.STORE_TOPIC || STORE_TOPIC;
@@ -28,4 +29,22 @@ console.log(
 );
 for (const entry of rejected) {
   console.log(`  [${entry.level}] ${entry.store_slug}: ${entry.reason}`);
+}
+
+// Publish the built directory to a Cloudflare R2 bucket (S3-compatible API)
+// when configured. Without R2_BUCKET the run is a local build only (useful for
+// tests and dry runs).
+const bucket = process.env.R2_BUCKET;
+if (bucket) {
+  const client = createR2Client({
+    accountId: process.env.R2_ACCOUNT_ID,
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    endpoint: process.env.R2_ENDPOINT,
+  });
+  const putObject = createR2PutObject({ client, bucket });
+  await uploadDirectory({ dir: outputDir, putObject });
+  console.log(`Published ${outputDir}/ to R2 bucket "${bucket}" (public URL: ${storeBaseUrl}).`);
+} else {
+  console.log('R2_BUCKET not set: skipping upload (local build only).');
 }

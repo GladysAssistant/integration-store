@@ -18,7 +18,7 @@ GitHub topic `gladys-assistant-integration`      (source of truth, distributed)
 │ 5. build index.json + rejected.json (deterministic)          │
 └─────────────────────────────────────────────────────────────┘
         │
-        ▼  GitHub Pages (static, CDN)
+        ▼  upload to a Cloudflare R2 bucket (S3-compatible, CDN-fronted)
 index.json · rejected.json · manifest.schema.json · covers/
         │
         ▼
@@ -36,11 +36,11 @@ No account to create, no PR to get approved:
 4. Wait for the next hourly indexing: your integration appears in the catalog of every Gladys instance.
 5. Publish a new version = bump `version` and `docker_image` in the manifest and push. That's it.
 
-If your integration does not show up, check the public [`rejected.json`](https://gladysassistant.github.io/integration-store/rejected.json): every rejected manifest is listed with the reason, so you can diagnose it yourself.
+If your integration does not show up, check the public `rejected.json` (at `<STORE_BASE_URL>/rejected.json`): every rejected manifest is listed with the reason, so you can diagnose it yourself.
 
 ## The manifest
 
-The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/manifest.schema.json) and is published next to the index at `https://gladysassistant.github.io/integration-store/manifest.schema.json`. Full example:
+The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/manifest.schema.json) and is published next to the index at `<STORE_BASE_URL>/manifest.schema.json`. Full example:
 
 ```json
 {
@@ -83,7 +83,7 @@ The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/mani
 | `cover_image`      | no       | `https` URL of a **JPEG or PNG**, **exactly 800×534 px**, **≤ 150 KB**                                                                                                                                                                                   |
 | `config_schema`    | no       | flat list of fields: `key` (`[a-z0-9_]`, unique), `type` (`string` \| `number` \| `boolean` \| `select` \| `secret`), `label` (multi-language, `en` mandatory), `description`, `required`, `default`, `min`/`max` (number only), `options` (select only) |
 
-A missing or invalid **cover** never rejects an integration: it is indexed with a placeholder and a `level: "warning"` entry is published in `rejected.json`. Valid covers are **re-hosted** on GitHub Pages (no dead links in the catalog, no user IP leaked to third-party servers, guaranteed size and format).
+A missing or invalid **cover** never rejects an integration: it is indexed with a placeholder and a `level: "warning"` entry is published in `rejected.json`. Valid covers are **re-hosted** in the store bucket (no dead links in the catalog, no user IP leaked to third-party servers, guaranteed size and format).
 
 The cover URL must be **direct** (redirects are not followed) and point to a public host (private and reserved addresses are refused); requests time out after 30 seconds. A raw GitHub URL of a file in your own repository (`https://raw.githubusercontent.com/<owner>/<repo>/main/cover.jpg`) satisfies all of this.
 
@@ -91,7 +91,7 @@ There is deliberately **no `permissions` field** in v1: outbound network access 
 
 ## Published files
 
-Everything is served statically from GitHub Pages:
+Everything is uploaded to the R2 bucket and served over its public URL (`<STORE_BASE_URL>/...`):
 
 | File                                | Content                                                                                                                                                                 |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -105,9 +105,21 @@ Everything is served statically from GitHub Pages:
 
 There is **no moderation in v1**: no blocklist, no manual removal. The real defenses are the strict Docker sandbox on the Gladys side, the explicit warning shown before installation, and the GitHub metadata (stars, repository age) visible in the catalog. A blocklist can be added later on the indexer side without touching any Gladys client.
 
+Files are uploaded to R2, never deleted: the freshly written `index.json`/`rejected.json` always reference the current covers, so a cover left behind by a removed integration is simply unreferenced (pruning is left out on purpose to keep the credentials write-only). The index and rejection documents are served with a short `Cache-Control` (they change on every crawl); covers and the schema are cached hard.
+
+## Hosting: Cloudflare R2
+
+The index is published to a **Cloudflare R2 bucket** through its S3-compatible API. To publish (repository Settings → Secrets and variables → Actions):
+
+- Create an R2 bucket and expose it publicly (a custom domain, or the bucket's `r2.dev` URL).
+- Create an R2 **API token** scoped to that bucket with object read/write.
+- Set the variables and secrets listed under [Development](#development).
+
+The store stays forkable: point `STORE_BASE_URL` at your own bucket URL and the whole pipeline works unchanged. Switching object stores later is a one-file change — any S3-compatible provider works by overriding `R2_ENDPOINT`.
+
 ## Resilience
 
-GitHub Pages is a static CDN front (no rate limit for Gladys instances); each Gladys keeps a local cache of the index, and installed integrations never depend on the index to run. The worst case (GitHub fully down) suspends the discovery of new integrations, never the operation of existing ones.
+The bucket is fronted by Cloudflare's CDN (no rate limit for Gladys instances); each Gladys keeps a local cache of the index, and installed integrations never depend on the index to run. The worst case (the bucket fully down) suspends the discovery of new integrations, never the operation of existing ones.
 
 ## Development
 
@@ -123,12 +135,19 @@ The indexer is plain Node.js (≥ 20), fully unit-tested against fixtures — ne
 
 Configuration of `npm run build-index`, via environment variables:
 
-| Variable         | Default                                               | Role                                                                                                               |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `GITHUB_TOKEN`   | –                                                     | GitHub API token (higher rate limit); provided automatically in the Action                                         |
-| `STORE_TOPIC`    | `gladys-assistant-integration`                        | topic to crawl                                                                                                     |
-| `STORE_BASE_URL` | `https://gladysassistant.github.io/integration-store` | public base URL used to build `cover_url`; derived from the repository name in the Action, so forks work unchanged |
-| `OUTPUT_DIR`     | `dist`                                                | output directory                                                                                                   |
+| Variable               | Required | Role                                                                                                                     |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `STORE_BASE_URL`       | yes      | public base URL of the bucket, no trailing slash (e.g. `https://store.example.com`); used to build every `cover_url`     |
+| `R2_ACCOUNT_ID`        | yes\*    | Cloudflare account id; builds the endpoint `https://<id>.r2.cloudflarestorage.com`                                       |
+| `R2_BUCKET`            | yes\*    | target bucket name; **when unset, the run is a local build only** (writes `dist/`, uploads nothing)                      |
+| `R2_ACCESS_KEY_ID`     | yes\*    | R2 API token access key id (secret)                                                                                      |
+| `R2_SECRET_ACCESS_KEY` | yes\*    | R2 API token secret access key (secret)                                                                                  |
+| `R2_ENDPOINT`          | no       | explicit S3 endpoint override (takes precedence over `R2_ACCOUNT_ID`; use for another provider or a jurisdiction bucket) |
+| `GITHUB_TOKEN`         | no       | GitHub API token (higher rate limit); provided automatically in the Action                                               |
+| `STORE_TOPIC`          | no       | topic to crawl (default `gladys-assistant-integration`)                                                                  |
+| `OUTPUT_DIR`           | no       | local build directory (default `dist`)                                                                                   |
+
+\* Required only to publish. Omit `R2_BUCKET` to do a local build (`dist/`) without uploading — handy for a dry run.
 
 `assets/placeholder-cover.png` is generated by `npm run generate-placeholder-cover` (dependency-free PNG writer) and committed.
 
