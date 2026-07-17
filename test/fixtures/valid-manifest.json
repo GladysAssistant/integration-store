@@ -15,6 +15,7 @@
       "key": "latitude",
       "type": "number",
       "label": { "en": "Latitude", "fr": "Latitude" },
+      "placeholder": { "en": "48.85", "fr": "48,85" },
       "required": true,
       "default": 48.85,
       "min": -90,
@@ -24,6 +25,7 @@
       "key": "api_key",
       "type": "secret",
       "label": { "en": "API key", "fr": "Clé d'API" },
+      "placeholder": { "en": "Paste your API key", "fr": "Collez votre clé d'API" },
       "required": false
     },
     {

@@ -259,7 +259,47 @@ describe('validateManifest', () => {
 
     it('should reject an unknown property on a field', () => {
       const manifest = buildManifest();
+      manifest.config_schema[0].icon = 'map-pin';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should accept a placeholder on string, number and secret fields', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'city',
+        type: 'string',
+        label: { en: 'City' },
+        placeholder: { en: 'Paris' },
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a placeholder that is not multi-language text', () => {
+      const manifest = buildManifest();
       manifest.config_schema[0].placeholder = '48.85';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a placeholder without english value', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[0].placeholder = { fr: '48,85' };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a placeholder on a boolean field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'enabled',
+        type: 'boolean',
+        label: { en: 'Enabled' },
+        placeholder: { en: 'yes' },
+      });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a placeholder on a select field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[2].placeholder = { en: 'Pick a unit' };
       expect(validateManifest(manifest).valid).to.equal(false);
     });
   });
