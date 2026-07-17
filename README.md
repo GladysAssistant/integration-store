@@ -14,8 +14,9 @@ GitHub topic `gladys-assistant-integration`      (source of truth, distributed)
 │ 1. search public repositories tagged with the topic          │
 │ 2. fetch gladys-assistant-integration.json from each repo    │
 │ 3. validate mechanically (JSON Schema + code rules)          │
-│ 4. download, validate and re-host each cover image           │
-│ 5. build index.json + rejected.json (deterministic)          │
+│ 4. check the Docker image exists on its registry             │
+│ 5. download, validate and re-host each cover image           │
+│ 6. build index.json + rejected.json (deterministic)          │
 └─────────────────────────────────────────────────────────────┘
         │
         ▼  upload to a Cloudflare R2 bucket (S3-compatible, CDN-fronted)
@@ -79,10 +80,12 @@ The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/mani
 | `name`             | yes      | 3–30 characters (title of the catalog card)                                                                                                                                                                                                                                                                               |
 | `description`      | yes      | object `{lang: text}`, `en` key mandatory, each value 10–100 characters                                                                                                                                                                                                                                                   |
 | `version`          | yes      | strict semver; bump it to trigger "update available" in Gladys                                                                                                                                                                                                                                                            |
-| `docker_image`     | yes      | well-formed image reference on any public registry, with an **explicit tag or digest**                                                                                                                                                                                                                                    |
+| `docker_image`     | yes      | well-formed image reference on any public registry, with an **explicit tag or digest**; the image must **actually exist** on its registry and be anonymously pullable                                                                                                                                                     |
 | `gladys_version`   | yes      | semver range (npm syntax), used for the compatibility filter                                                                                                                                                                                                                                                              |
 | `cover_image`      | no       | `https` URL of a **JPEG or PNG**, **exactly 800×534 px**, **≤ 150 KB**                                                                                                                                                                                                                                                    |
 | `config_schema`    | no       | flat list of fields: `key` (`[a-z0-9_]`, unique), `type` (`string` \| `number` \| `boolean` \| `select` \| `secret`), `label` (multi-language, `en` mandatory), `description`, `placeholder` (multi-language, `string`/`number`/`secret` only), `required`, `default`, `min`/`max` (number only), `options` (select only) |
+
+The **Docker image is verified against its registry** (Docker Registry HTTP API v2, with an anonymous pull token when the registry asks for one — Docker Hub, GHCR, Quay and self-hosted registries all speak this protocol): a manifest whose image does not exist, or cannot be pulled anonymously, is rejected — a catalog entry must have an image at the end. Only a definitive registry answer rejects; a transient failure (registry unreachable, 5xx) never evicts an integration that may already be published: it is indexed anyway with a `level: "warning"` entry in `rejected.json`. The check is a `HEAD` on the image manifest, so nothing is downloaded and it does not count against Docker Hub's pull rate limit.
 
 A missing or invalid **cover** never rejects an integration: it is indexed with a placeholder and a `level: "warning"` entry is published in `rejected.json`. Valid covers are **re-hosted** in the store bucket (no dead links in the catalog, no user IP leaked to third-party servers, guaranteed size and format).
 

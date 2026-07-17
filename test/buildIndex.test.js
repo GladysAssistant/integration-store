@@ -57,6 +57,15 @@ function fakeCoverDownloader(responses = {}) {
   return async ({ url }) => responses[url] ?? { status: 'error', reason: 'download failed (HTTP 404)' };
 }
 
+/**
+ * Fake Docker image checker backed by a map of reference → result.
+ * @param {object} responses - Map of image reference → checkDockerImage result.
+ * @returns {Function} checkDockerImage-compatible function.
+ */
+function fakeImageChecker(responses = {}) {
+  return async ({ reference }) => responses[reference] ?? { status: 'ok' };
+}
+
 describe('buildIndex', () => {
   it('should index a valid integration with its re-hosted cover', async () => {
     const goodManifest = manifest({ cover_image: 'https://example.com/cover.jpg' });
@@ -65,6 +74,7 @@ describe('buildIndex', () => {
       fetchManifestFile: fakeManifestFetcher({
         'john/gladys-open-meteo-demo': { status: 'ok', raw: JSON.stringify(goodManifest) },
       }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
       }),
@@ -98,6 +108,7 @@ describe('buildIndex', () => {
     const { coverFiles, index } = await buildIndex({
       repositories: [repository('john', 'demo')],
       fetchManifestFile: fakeManifestFetcher({ 'john/demo': { status: 'ok', raw: JSON.stringify(goodManifest) } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.png': { status: 'ok', data: createSolidPng(COVER_WIDTH, COVER_HEIGHT, [1, 2, 3]) },
       }),
@@ -114,6 +125,7 @@ describe('buildIndex', () => {
     const { index, rejected, coverFiles } = await buildIndex({
       repositories: [repository('bob', 'no-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'bob/no-cover': { status: 'ok', raw: JSON.stringify(noCover) } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -136,6 +148,7 @@ describe('buildIndex', () => {
     const { index, rejected } = await buildIndex({
       repositories: [repository('carol', 'bad-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'carol/bad-cover': { status: 'ok', raw: JSON.stringify(badCover) } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/big.jpg': { status: 'ok', data: createSolidPng(1200, 800, [0, 0, 0]) },
       }),
@@ -158,6 +171,7 @@ describe('buildIndex', () => {
     const { rejected } = await buildIndex({
       repositories: [repository('carol', 'gone-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'carol/gone-cover': { status: 'ok', raw: JSON.stringify(badCover) } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -176,6 +190,7 @@ describe('buildIndex', () => {
     const { index, rejected } = await buildIndex({
       repositories: [repository('eve', 'no-manifest')],
       fetchManifestFile: fakeManifestFetcher({ 'eve/no-manifest': { status: 'not_found' } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -197,6 +212,7 @@ describe('buildIndex', () => {
       fetchManifestFile: fakeManifestFetcher({
         'heidi/flaky': { status: 'error', reason: 'download failed (HTTP 500)' },
       }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -215,6 +231,7 @@ describe('buildIndex', () => {
     const { rejected } = await buildIndex({
       repositories: [repository('frank', 'broken-json')],
       fetchManifestFile: fakeManifestFetcher({ 'frank/broken-json': { status: 'ok', raw: '{ not json' } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -234,6 +251,7 @@ describe('buildIndex', () => {
     const { rejected } = await buildIndex({
       repositories: [repository('dave', 'bad-semver')],
       fetchManifestFile: fakeManifestFetcher({ 'dave/bad-semver': { status: 'ok', raw: JSON.stringify(badManifest) } }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -248,6 +266,61 @@ describe('buildIndex', () => {
     ]);
   });
 
+  it('should reject an integration whose Docker image does not exist', async () => {
+    const goodManifest = manifest();
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('mallory', 'ghost-image')],
+      fetchManifestFile: fakeManifestFetcher({
+        'mallory/ghost-image': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker({
+        [goodManifest.docker_image]: {
+          status: 'error',
+          reason: 'image not found on registry "ghcr.io" (HTTP 404)',
+        },
+      }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.deep.equal([]);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'mallory/ghost-image',
+        level: 'error',
+        reason: 'docker_image: image not found on registry "ghcr.io" (HTTP 404)',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
+  it('should index with a warning when the Docker image cannot be verified', async () => {
+    const goodManifest = manifest({ cover_image: 'https://example.com/cover.jpg' });
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('grace', 'flaky-registry')],
+      fetchManifestFile: fakeManifestFetcher({
+        'grace/flaky-registry': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker({
+        [goodManifest.docker_image]: { status: 'unverified', reason: 'registry check failed (HTTP 503)' },
+      }),
+      downloadCover: fakeCoverDownloader({
+        'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
+      }),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.have.lengthOf(1);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'grace/flaky-registry',
+        level: 'warning',
+        reason: 'docker_image: registry check failed (HTTP 503) — indexed without image verification',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
   it('should produce a deterministic output sorted by store_slug regardless of input order', async () => {
     const manifestA = manifest();
     delete manifestA.cover_image;
@@ -257,6 +330,7 @@ describe('buildIndex', () => {
         'zoe/z-repo': { status: 'ok', raw: JSON.stringify(manifestA) },
         'adam/a-repo': { status: 'ok', raw: JSON.stringify(manifestA) },
       }),
+      checkDockerImage: fakeImageChecker(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,

@@ -73,18 +73,27 @@ async function resolveCover(repository, manifest, downloadCover, storeBaseUrl) {
 
 /**
  * Build the store index from the repositories tagged with the store topic:
- * fetch each manifest, validate it (schema + code rules), validate and
- * re-host each cover, and produce the deterministic index.json /
- * rejected.json contents (C.6) plus the cover files to publish.
+ * fetch each manifest, validate it (schema + code rules), check that the
+ * Docker image actually exists on its registry, validate and re-host each
+ * cover, and produce the deterministic index.json / rejected.json contents
+ * (C.6) plus the cover files to publish.
  * @param {object} options - Options.
  * @param {object[]} options.repositories - Output of searchRepositoriesByTopic.
  * @param {Function} options.fetchManifestFile - Manifest fetcher (injectable for tests).
+ * @param {Function} options.checkDockerImage - Docker image existence checker (injectable for tests).
  * @param {Function} options.downloadCover - Cover downloader (injectable for tests).
  * @param {string} options.storeBaseUrl - Public base URL of the published store, no trailing slash.
  * @param {string} options.now - ISO 8601 timestamp of the crawl (injected: keeps the output deterministic).
  * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[]}>} Build result.
  */
-export async function buildIndex({ repositories, fetchManifestFile, downloadCover, storeBaseUrl, now }) {
+export async function buildIndex({
+  repositories,
+  fetchManifestFile,
+  checkDockerImage,
+  downloadCover,
+  storeBaseUrl,
+  now,
+}) {
   const integrations = [];
   const rejected = [];
   const coverFiles = [];
@@ -106,6 +115,19 @@ export async function buildIndex({ repositories, fetchManifestFile, downloadCove
     if (!validation.valid) {
       reject(REJECTION_LEVELS.ERROR, validation.errors.join('; '));
       continue;
+    }
+
+    // A definitive registry verdict (image missing, not anonymously pullable)
+    // rejects the integration: a catalog entry must have an image at the end.
+    // A transient registry failure must not evict an integration that may
+    // already be published: it is indexed with a warning instead.
+    const imageCheck = await checkDockerImage({ reference: manifest.docker_image });
+    if (imageCheck.status === 'error') {
+      reject(REJECTION_LEVELS.ERROR, `docker_image: ${imageCheck.reason}`);
+      continue;
+    }
+    if (imageCheck.status === 'unverified') {
+      reject(REJECTION_LEVELS.WARNING, `docker_image: ${imageCheck.reason} — indexed without image verification`);
     }
 
     const { coverUrl, coverFile, warning } = await resolveCover(repository, manifest, downloadCover, storeBaseUrl);

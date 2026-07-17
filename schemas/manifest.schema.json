@@ -44,7 +44,7 @@
     "docker_image": {
       "type": "string",
       "minLength": 1,
-      "description": "Docker image reference on any public registry, with an explicit tag or digest (e.g. \"ghcr.io/john/gladys-open-meteo-demo:1.2.0\")."
+      "description": "Docker image reference on any public registry, with an explicit tag or digest (e.g. \"ghcr.io/john/gladys-open-meteo-demo:1.2.0\"). The image must exist on its registry and be anonymously pullable: the indexer verifies it against the registry API."
     },
     "gladys_version": {
       "type": "string",
