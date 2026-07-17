@@ -1,4 +1,5 @@
 import { buildIndex } from './buildIndex.js';
+import { checkDockerImage } from './checkDockerImage.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
 import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from './uploadToR2.js';
@@ -15,6 +16,7 @@ console.log(`Found ${repositories.length} public repositories tagged "${topic}".
 const { index, rejected, coverFiles } = await buildIndex({
   repositories,
   fetchManifestFile,
+  checkDockerImage,
   downloadCover,
   storeBaseUrl,
   now: new Date().toISOString(),
