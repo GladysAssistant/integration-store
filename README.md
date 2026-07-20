@@ -39,6 +39,26 @@ No account to create, no PR to get approved:
 
 If your integration does not show up, check the public `rejected.json` (at `<STORE_BASE_URL>/rejected.json`): every rejected manifest is listed with the reason, so you can diagnose it yourself.
 
+## Test your integration locally
+
+No need to wait for the hourly indexing to discover a rejection: run the exact same admission checks locally, from the root of your integration repository:
+
+```bash
+npx github:GladysAssistant/integration-store
+```
+
+(or point it at a directory: `npx github:GladysAssistant/integration-store path/to/my-integration`)
+
+It replays the validation of the indexer against your local `gladys-assistant-integration.json`:
+
+- JSON Schema + code rules (same `validateManifest` code as the robot);
+- the Docker images (main and sub-containers) exist on their registry and are anonymously pullable;
+- the cover contract (JPEG or PNG, exactly 800x534, ≤ 150 KB).
+
+The exit code is `0` when the integration would be indexed and `1` when it would be rejected; warnings are the non-blocking degradations also published in `rejected.json` (e.g. placeholder cover). Unlike the hourly robot, the local run reports **all** problems at once, so everything can be fixed in a single pass.
+
+What a local run cannot verify: that the repository is public, tagged with the `gladys-assistant-integration` topic, and that the manifest is pushed at the root of the default branch.
+
 ## The manifest
 
 The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/manifest.schema.json) and is published next to the index at `<STORE_BASE_URL>/manifest.schema.json`. Full example:

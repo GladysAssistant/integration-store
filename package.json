@@ -4,6 +4,9 @@
   "description": "Automated indexer of the decentralized Gladys Assistant integration store: crawls the `gladys-assistant-integration` GitHub topic, validates manifests, and publishes a static index.json to a Cloudflare R2 bucket.",
   "type": "module",
   "private": true,
+  "bin": {
+    "gladys-integration-store": "src/validate-cli.js"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -14,6 +17,7 @@
   },
   "scripts": {
     "build-index": "node src/cli.js",
+    "validate": "node src/validate-cli.js",
     "generate-placeholder-cover": "node scripts/generate-placeholder-cover.js",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint --fix . && prettier --write .",
