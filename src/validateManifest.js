@@ -44,23 +44,32 @@ function validateConfigFieldDefault(field, path) {
       return field.options.some((option) => option.value === field.default)
         ? []
         : [`${path}.default: must be one of the select options`];
-    // A secret has no meaningful default: it would end up published in the store index.
+    case 'multi_select': {
+      const validValues = field.options.map((option) => option.value);
+      return Array.isArray(field.default) && field.default.every((value) => validValues.includes(value))
+        ? []
+        : [`${path}.default: must be an array of the multi_select option values`];
+    }
+    // secret: it would end up published in the store index ;
+    // oauth2: the value is the Connect flow, tokens live off-schema.
     default:
-      return [`${path}.default: not allowed for secret fields`];
+      return [`${path}.default: not allowed for ${field.type} fields`];
   }
 }
 
 /**
- * Rules on config_schema that JSON Schema cannot express: key uniqueness,
- * default/type consistency, min/max consistency.
- * @param {object[]} configSchema - The manifest `config_schema` array.
+ * Rules on a flat list of config fields that JSON Schema cannot express:
+ * key uniqueness, default/type consistency, min/max consistency. Used for the
+ * manifest `config_schema` and for each action mini form (`fields`).
+ * @param {object[]} configSchema - Flat list of config fields.
+ * @param {string} basePath - Dotted path of the list, for error messages.
  * @returns {string[]} Reasons, empty when valid.
  */
-function validateConfigSchemaRules(configSchema) {
+function validateConfigSchemaRules(configSchema, basePath) {
   const errors = [];
   const seenKeys = new Set();
   configSchema.forEach((field, i) => {
-    const path = `manifest.config_schema.${i}`;
+    const path = `${basePath}.${i}`;
     if (seenKeys.has(field.key)) {
       errors.push(`${path}.key: duplicate key "${field.key}"`);
     }
@@ -74,9 +83,81 @@ function validateConfigSchemaRules(configSchema) {
 }
 
 /**
+ * Rules on the `containers` list that JSON Schema cannot express: name
+ * uniqueness, image reference validity, reserved env keys, volume path
+ * traversal, hardware class uniqueness.
+ * @param {object[]} containers - The manifest `containers` array.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateSubContainerRules(containers) {
+  const errors = [];
+  const seenNames = new Set();
+  containers.forEach((container, i) => {
+    const path = `manifest.containers.${i}`;
+    if (seenNames.has(container.name)) {
+      errors.push(`${path}.name: duplicate name "${container.name}"`);
+    }
+    seenNames.add(container.name);
+    if (!isValidDockerImageReference(container.docker_image)) {
+      errors.push(`${path}.docker_image: must be a valid image reference with an explicit tag or digest`);
+    }
+    if (container.env !== undefined) {
+      // The manifest is public: GLADYS_* is reserved (no token, no identity).
+      Object.keys(container.env).forEach((key) => {
+        if (key.toUpperCase().startsWith('GLADYS_')) {
+          errors.push(`${path}.env.${key}: GLADYS_* keys are reserved`);
+        }
+      });
+    }
+    if (container.volumes !== undefined) {
+      // The host path is derived from the volume path by the supervisor: no
+      // `..` segment that could escape the integration data folder.
+      container.volumes.forEach((volume, volumeIndex) => {
+        if (volume.split('/').includes('..')) {
+          errors.push(`${path}.volumes.${volumeIndex}: must not contain ".." segments`);
+        }
+      });
+    }
+    if (container.devices !== undefined) {
+      const seenClasses = new Set();
+      container.devices.forEach((hardwareClass, classIndex) => {
+        if (seenClasses.has(hardwareClass)) {
+          errors.push(`${path}.devices.${classIndex}: duplicate class "${hardwareClass}"`);
+        }
+        seenClasses.add(hardwareClass);
+      });
+    }
+  });
+  return errors;
+}
+
+/**
+ * Rules on the `actions` list that JSON Schema cannot express: key uniqueness
+ * and the config-field rules of each mini form (keys unique within an action).
+ * @param {object[]} actions - The manifest `actions` array.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateActionRules(actions) {
+  const errors = [];
+  const seenKeys = new Set();
+  actions.forEach((action, i) => {
+    const path = `manifest.actions.${i}`;
+    if (seenKeys.has(action.key)) {
+      errors.push(`${path}.key: duplicate key "${action.key}"`);
+    }
+    seenKeys.add(action.key);
+    if (action.fields !== undefined) {
+      errors.push(...validateConfigSchemaRules(action.fields, `${path}.fields`));
+    }
+  });
+  return errors;
+}
+
+/**
  * Validate an integration manifest: JSON Schema first, then the rules the
- * schema cannot express (strict semver, semver range, image reference,
- * config_schema consistency). Indexer and Gladys server apply the same rules.
+ * schema cannot express (strict semver, semver range, image references,
+ * config_schema/containers/actions consistency). Indexer and Gladys server
+ * apply the same rules.
  * @param {*} manifest - Parsed content of gladys-assistant-integration.json.
  * @returns {{valid: boolean, errors: string[]}} Validation result.
  */
@@ -113,7 +194,13 @@ export function validateManifest(manifest) {
     errors.push('manifest.docker_image: must be a valid image reference with an explicit tag or digest');
   }
   if (manifest.config_schema !== undefined) {
-    errors.push(...validateConfigSchemaRules(manifest.config_schema));
+    errors.push(...validateConfigSchemaRules(manifest.config_schema, 'manifest.config_schema'));
+  }
+  if (manifest.containers !== undefined) {
+    errors.push(...validateSubContainerRules(manifest.containers));
+  }
+  if (manifest.actions !== undefined) {
+    errors.push(...validateActionRules(manifest.actions));
   }
 
   return { valid: errors.length === 0, errors };

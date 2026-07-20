@@ -321,9 +321,66 @@ describe('buildIndex', () => {
     ]);
   });
 
+  it('should reject an integration whose sub-container image does not exist', async () => {
+    const goodManifest = manifest();
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('mallory', 'ghost-sub-image')],
+      fetchManifestFile: fakeManifestFetcher({
+        'mallory/ghost-sub-image': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker({
+        [goodManifest.containers[0].docker_image]: {
+          status: 'error',
+          reason: 'image not found on registry "registry-1.docker.io" (HTTP 404)',
+        },
+      }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.deep.equal([]);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'mallory/ghost-sub-image',
+        level: 'error',
+        reason: 'containers.0.docker_image: image not found on registry "registry-1.docker.io" (HTTP 404)',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
+  it('should index with a warning when a sub-container image cannot be verified', async () => {
+    const goodManifest = manifest({ cover_image: 'https://example.com/cover.jpg' });
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('grace', 'flaky-sub-registry')],
+      fetchManifestFile: fakeManifestFetcher({
+        'grace/flaky-sub-registry': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker({
+        [goodManifest.containers[0].docker_image]: { status: 'unverified', reason: 'registry check failed (HTTP 503)' },
+      }),
+      downloadCover: fakeCoverDownloader({
+        'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
+      }),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.have.lengthOf(1);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'grace/flaky-sub-registry',
+        level: 'warning',
+        reason: 'containers.0.docker_image: registry check failed (HTTP 503) — indexed without image verification',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
   it('should produce a deterministic output sorted by store_slug regardless of input order', async () => {
     const manifestA = manifest();
     delete manifestA.cover_image;
+    // No sub-container: only the main image goes through the registry check.
+    delete manifestA.containers;
     const repositories = [repository('zoe', 'z-repo'), repository('adam', 'a-repo')];
     const fetchers = {
       fetchManifestFile: fakeManifestFetcher({
