@@ -74,8 +74,9 @@ async function resolveCover(repository, manifest, downloadCover, storeBaseUrl) {
 /**
  * Build the store index from the repositories tagged with the store topic:
  * fetch each manifest, validate it (schema + code rules), check that the
- * Docker image actually exists on its registry, validate and re-host each
- * cover, and produce the deterministic index.json / rejected.json contents
+ * Docker images (main and sub-containers) actually exist on their registry,
+ * validate and re-host each cover, and produce the deterministic
+ * index.json / rejected.json contents
  * (C.6) plus the cover files to publish.
  * @param {object} options - Options.
  * @param {object[]} options.repositories - Output of searchRepositoriesByTopic.
@@ -118,16 +119,31 @@ export async function buildIndex({
     }
 
     // A definitive registry verdict (image missing, not anonymously pullable)
-    // rejects the integration: a catalog entry must have an image at the end.
-    // A transient registry failure must not evict an integration that may
-    // already be published: it is indexed with a warning instead.
-    const imageCheck = await checkDockerImage({ reference: manifest.docker_image });
-    if (imageCheck.status === 'error') {
-      reject(REJECTION_LEVELS.ERROR, `docker_image: ${imageCheck.reason}`);
-      continue;
+    // rejects the integration: a catalog entry must have an image at the end —
+    // the sub-container images follow the exact same rule. A transient registry
+    // failure must not evict an integration that may already be published: it
+    // is indexed with a warning instead.
+    const imageReferences = [
+      { path: 'docker_image', reference: manifest.docker_image },
+      ...(manifest.containers ?? []).map((container, i) => ({
+        path: `containers.${i}.docker_image`,
+        reference: container.docker_image,
+      })),
+    ];
+    let missingImage = false;
+    for (const { path, reference } of imageReferences) {
+      const imageCheck = await checkDockerImage({ reference });
+      if (imageCheck.status === 'error') {
+        reject(REJECTION_LEVELS.ERROR, `${path}: ${imageCheck.reason}`);
+        missingImage = true;
+        break;
+      }
+      if (imageCheck.status === 'unverified') {
+        reject(REJECTION_LEVELS.WARNING, `${path}: ${imageCheck.reason} — indexed without image verification`);
+      }
     }
-    if (imageCheck.status === 'unverified') {
-      reject(REJECTION_LEVELS.WARNING, `docker_image: ${imageCheck.reason} — indexed without image verification`);
+    if (missingImage) {
+      continue;
     }
 
     const { coverUrl, coverFile, warning } = await resolveCover(repository, manifest, downloadCover, storeBaseUrl);

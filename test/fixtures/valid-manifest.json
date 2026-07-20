@@ -38,5 +38,36 @@
         { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
       ]
     }
+  ],
+  "transports": ["local", "cloud"],
+  "containers": [
+    {
+      "name": "mqtt",
+      "docker_image": "eclipse-mosquitto:2.0.18",
+      "start": "manual",
+      "env": { "MOSQUITTO_LOG_DEST": "stdout" },
+      "volumes": ["/mosquitto/config"],
+      "ports": [{ "container_port": 1883, "protocol": "tcp", "label": { "en": "MQTT broker", "fr": "Broker MQTT" } }],
+      "devices": ["video"],
+      "read_only": true,
+      "memory_mb": 128,
+      "cpu": 0.5
+    }
+  ],
+  "network_discovery": [
+    { "type": "udp-broadcast", "ports": [6666, 6667] },
+    { "type": "mdns", "service": "_hue._tcp" },
+    { "type": "ssdp", "st": "urn:schemas-upnp-org:device:basic:1" }
+  ],
+  "actions": [
+    {
+      "key": "test_connection",
+      "label": { "en": "Test connection", "fr": "Tester la connexion" },
+      "description": { "en": "Checks that the configured API key works." },
+      "timeout_seconds": 30,
+      "fields": [
+        { "key": "host", "type": "string", "label": { "en": "Host" }, "placeholder": { "en": "192.168.1.10" } }
+      ]
+    }
   ]
 }

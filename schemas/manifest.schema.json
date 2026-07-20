@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/manifest.schema.json",
   "title": "Gladys Assistant external integration manifest",
-  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest, `config_schema` keys must be unique and defaults must match their field type.",
+  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys and action keys must be unique and defaults must match their field type, sub-container names must be unique, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments.",
   "type": "object",
   "additionalProperties": false,
   "required": ["manifest_version", "type", "name", "description", "version", "docker_image", "gladys_version"],
@@ -62,6 +62,43 @@
       "items": {
         "$ref": "#/definitions/configField"
       }
+    },
+    "containers": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "Authorization contract of the additional sub-containers (multi-container integrations, e.g. Frigate + Mosquitto): everything that can run — images, limits, published ports, hardware access — shown to the user on the install screen. The lifecycle is then driven by the integration through the /container host API, only within these bounds.",
+      "items": {
+        "$ref": "#/definitions/subContainer"
+      }
+    },
+    "network_discovery": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "description": "Curated network capture requests (mediated discovery): the Gladys core, running in network=host, captures on behalf of the integration, which interprets the raw results itself. Shown on the install screen as an authorization contract; no arbitrary capture.",
+      "items": {
+        "$ref": "#/definitions/networkDiscoveryEntry"
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "description": "On-demand operations rendered as buttons in the Configuration screen (connection test, identify, protocol detection...). Each action is relayed to the integration over WebSocket and acked within its own declared timeout.",
+      "items": {
+        "$ref": "#/definitions/action"
+      }
+    },
+    "transports": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["local", "cloud"]
+      },
+      "description": "Channels the integration knows how to use. When both are declared, Gladys renders the standard core-translated \"Prefer local (LAN) connection\" toggle, stored as the reserved GLADYS_PREFER_LOCAL config key (boolean, default true) — readable by the integration, never writable by it. The preference is a wish; the per-device reality is reported through the GLADYS_TRANSPORT param."
     }
   },
   "definitions": {
@@ -88,8 +125,8 @@
         },
         "type": {
           "type": "string",
-          "enum": ["string", "number", "boolean", "select", "secret"],
-          "description": "Field widget type. `secret` values are never sent back to the frontend."
+          "enum": ["string", "number", "boolean", "select", "multi_select", "secret", "oauth2"],
+          "description": "Field widget type. `secret` values are never sent back to the frontend; `oauth2` renders a Connect button (relayed OAuth2 authorization-code flow, tokens stored off-schema by the integration); `multi_select` renders checkboxes and stores an array of option values."
         },
         "label": {
           "$ref": "#/definitions/multiLanguageText"
@@ -106,7 +143,7 @@
           "default": false
         },
         "default": {
-          "description": "Default value. Must match the field type (code-enforced); not allowed for `secret` fields."
+          "description": "Default value. Must match the field type (code-enforced); not allowed for `secret` and `oauth2` fields."
         },
         "min": {
           "type": "number",
@@ -119,7 +156,7 @@
         "options": {
           "type": "array",
           "minItems": 1,
-          "description": "Choices of a `select` field.",
+          "description": "Choices of a `select` or `multi_select` field.",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -134,6 +171,11 @@
               }
             }
           }
+        },
+        "display": {
+          "type": "string",
+          "enum": ["dropdown", "radio"],
+          "description": "Rendering of a `select` field: dropdown (default) or radio buttons."
         }
       },
       "allOf": [
@@ -141,7 +183,7 @@
           "if": {
             "properties": {
               "type": {
-                "const": "select"
+                "enum": ["select", "multi_select"]
               }
             }
           },
@@ -194,8 +236,265 @@
               "required": ["placeholder"]
             }
           }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {
+                  "const": "select"
+                }
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["display"]
+            }
+          }
         }
       ]
+    },
+    "subContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "docker_image"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{2,20}$",
+          "description": "Unique name of the sub-container: DNS alias on the private network of the integration, suffix of the container name and identifier in the /container host API."
+        },
+        "docker_image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Docker image reference, same rules as the main image (public registry, explicit tag or digest, multi-arch recommended)."
+        },
+        "start": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "default": "auto",
+          "description": "`auto`: created and started by the supervisor before the main container. `manual`: nothing starts until the integration calls POST /container/:name/start (e.g. generate a password file in /data first)."
+        },
+        "env": {
+          "type": "object",
+          "description": "Static string environment variables. GLADYS_* keys are forbidden (code-enforced). The manifest is public: never a secret here — runtime credentials go through /data files or the env of POST /container/:name/start.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "volumes": {
+          "type": "array",
+          "maxItems": 5,
+          "description": "Absolute container paths. Each one is mounted from a sub-folder derived from the integration data folder by the supervisor — the manifest never chooses a host path.",
+          "items": {
+            "type": "string",
+            "pattern": "^/"
+          }
+        },
+        "ports": {
+          "type": "array",
+          "maxItems": 3,
+          "description": "Published ports. The host port is chosen by Gladys (free, persisted across recreations), never declared. Publishing a port exposes a third-party interface on the LAN: it is shown on the install screen.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["container_port", "label"],
+            "properties": {
+              "container_port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "protocol": {
+                "type": "string",
+                "enum": ["tcp", "udp"],
+                "default": "tcp"
+              },
+              "label": {
+                "$ref": "#/definitions/multiLanguageText",
+                "description": "Names the \"Open\" link in the Gladys UI."
+              }
+            }
+          }
+        },
+        "devices": {
+          "type": "array",
+          "description": "Requested hardware access classes — never a free /dev path. Requesting is not obtaining: each class is granted or refused by the user in the UI; the effective mount is requested ∩ granted ∩ present.",
+          "items": {
+            "type": "string",
+            "enum": ["coral-usb", "coral-pcie", "gpu", "video"]
+          }
+        },
+        "read_only": {
+          "type": "boolean",
+          "default": true,
+          "description": "Read-only root filesystem. Opt-out possible: some upstream images (e.g. Frigate) do not run with a read-only rootfs."
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 4096,
+          "default": 256,
+          "description": "Memory limit in MB, shown on the install screen."
+        },
+        "cpu": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 2,
+          "default": 0.5,
+          "description": "CPU limit, shown on the install screen."
+        },
+        "shm_mb": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 512,
+          "default": 64,
+          "description": "/dev/shm size in MB, useful for video processing."
+        },
+        "command": {
+          "type": "array",
+          "description": "Optional override of the image CMD.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "networkDiscoveryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["udp-broadcast", "mdns", "ssdp"],
+          "description": "Capture type: passive listen on declared UDP broadcast ports, mDNS browse of a declared service type, or SSDP M-SEARCH on a declared st."
+        },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "uniqueItems": true,
+          "description": "UDP broadcast ports to listen on, `udp-broadcast` type only."
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^_[a-z0-9-]+\\._(tcp|udp)$",
+          "description": "DNS-SD service type to browse (e.g. \"_hue._tcp\"), `mdns` type only."
+        },
+        "st": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "SSDP search target for the M-SEARCH, `ssdp` type only."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "udp-broadcast"
+              }
+            }
+          },
+          "then": {
+            "required": ["ports"],
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["service"]
+                },
+                {
+                  "required": ["st"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "mdns"
+              }
+            }
+          },
+          "then": {
+            "required": ["service"],
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["ports"]
+                },
+                {
+                  "required": ["st"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ssdp"
+              }
+            }
+          },
+          "then": {
+            "required": ["st"],
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["ports"]
+                },
+                {
+                  "required": ["service"]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Unique key of the action."
+        },
+        "label": {
+          "$ref": "#/definitions/multiLanguageText"
+        },
+        "description": {
+          "$ref": "#/definitions/multiLanguageText"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 120,
+          "default": 30,
+          "description": "Ack delay granted to the action (exception to the 5s command rule: these operations can be long)."
+        },
+        "fields": {
+          "type": "array",
+          "description": "Optional flat form shown before running the action, same format as config_schema entries.",
+          "items": {
+            "$ref": "#/definitions/configField"
+          }
+        }
+      }
     }
   }
 }
