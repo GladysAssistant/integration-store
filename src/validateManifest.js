@@ -160,10 +160,28 @@ function validateActionRules(actions) {
 }
 
 /**
+ * Rules on the `webhooks` list that JSON Schema cannot express: key
+ * uniqueness (the key is the last segment of the public relay URL).
+ * @param {object[]} webhooks - The manifest `webhooks` array.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateWebhookRules(webhooks) {
+  const errors = [];
+  const seenKeys = new Set();
+  webhooks.forEach((webhook, i) => {
+    if (seenKeys.has(webhook.key)) {
+      errors.push(`manifest.webhooks.${i}.key: duplicate key "${webhook.key}"`);
+    }
+    seenKeys.add(webhook.key);
+  });
+  return errors;
+}
+
+/**
  * Validate an integration manifest: JSON Schema first, then the rules the
  * schema cannot express (strict semver, semver range, image references,
- * config_schema/containers/actions consistency). Indexer and Gladys server
- * apply the same rules.
+ * config_schema/contact_schema/containers/actions/webhooks consistency).
+ * Indexer and Gladys server apply the same rules.
  * @param {*} manifest - Parsed content of gladys-assistant-integration.json.
  * @returns {{valid: boolean, errors: string[]}} Validation result.
  */
@@ -202,11 +220,19 @@ export function validateManifest(manifest) {
   if (manifest.config_schema !== undefined) {
     errors.push(...validateConfigSchemaRules(manifest.config_schema, 'manifest.config_schema'));
   }
+  // The per-user identity fields of a send-only channel share the flat config
+  // field format (contract B.15), so they share its code rules too.
+  if (manifest.contact_schema !== undefined) {
+    errors.push(...validateConfigSchemaRules(manifest.contact_schema, 'manifest.contact_schema'));
+  }
   if (manifest.containers !== undefined) {
     errors.push(...validateSubContainerRules(manifest.containers));
   }
   if (manifest.actions !== undefined) {
     errors.push(...validateActionRules(manifest.actions));
+  }
+  if (manifest.webhooks !== undefined) {
+    errors.push(...validateWebhookRules(manifest.webhooks));
   }
 
   return { valid: errors.length === 0, errors };

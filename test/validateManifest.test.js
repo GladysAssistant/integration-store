@@ -71,9 +71,10 @@ describe('validateManifest', () => {
     expect(result.errors.join(' ')).to.include('must NOT have additional properties');
   });
 
-  it('should accept a communication integration', () => {
+  it('should accept a bidirectional communication integration', () => {
     const manifest = buildManifest();
     manifest.type = 'communication';
+    manifest.messaging = { receive: true };
     expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
   });
 
@@ -708,6 +709,160 @@ describe('validateManifest', () => {
     it('should reject an udp-active-broadcast capture with a field of another type', () => {
       const manifest = buildManifest();
       manifest.network_discovery = [{ type: 'udp-active-broadcast', ports: [9999], st: 'urn:x' }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('messaging and contact_schema', () => {
+    /**
+     * Build a valid send-only communication manifest (Free Mobile-style).
+     * @returns {object} A fresh valid send-only manifest.
+     */
+    function buildSendOnlyManifest() {
+      const manifest = buildManifest();
+      manifest.type = 'communication';
+      manifest.messaging = { receive: false };
+      manifest.contact_schema = [
+        { key: 'username', type: 'string', label: { en: 'Free Mobile login' }, required: true },
+        { key: 'access_token', type: 'secret', label: { en: 'SMS API key' }, required: true },
+      ];
+      return manifest;
+    }
+
+    it('should accept a send-only channel with a contact_schema', () => {
+      expect(validateManifest(buildSendOnlyManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a communication integration without messaging', () => {
+      const manifest = buildManifest();
+      manifest.type = 'communication';
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('messaging');
+    });
+
+    it('should reject messaging on a device integration', () => {
+      const manifest = buildManifest();
+      manifest.messaging = { receive: true };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a contact_schema on a device integration', () => {
+      const manifest = buildManifest();
+      manifest.contact_schema = [{ key: 'username', type: 'string', label: { en: 'Login' } }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a messaging object without receive', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.messaging = {};
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an unknown messaging property', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.messaging = { receive: false, send: true };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a non-boolean receive', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.messaging.receive = 'no';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a send-only channel without contact_schema', () => {
+      const manifest = buildSendOnlyManifest();
+      delete manifest.contact_schema;
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('contact_schema');
+    });
+
+    it('should reject a contact_schema on a bidirectional channel', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.messaging.receive = true;
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an empty contact_schema', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema = [];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should apply the config field rules to the contact_schema', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema.push({ key: 'username', type: 'string', label: { en: 'Login again' } });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.contact_schema.2.key: duplicate key "username"',
+      ]);
+    });
+
+    it('should reject a default on a secret contact field', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema[1].default = 's3cr3t';
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.contact_schema.1.default: not allowed for secret fields',
+      ]);
+    });
+  });
+
+  describe('webhooks', () => {
+    it('should reject an empty webhooks list', () => {
+      const manifest = buildManifest();
+      manifest.webhooks = [];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject more than 3 webhooks', () => {
+      const manifest = buildManifest();
+      manifest.webhooks = Array.from({ length: 4 }, (unused, i) => ({
+        key: `hook_${i}`,
+        label: { en: `Hook ${i}` },
+      }));
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should accept a webhook without mode (fire_and_forget is the default)', () => {
+      const manifest = buildManifest();
+      manifest.webhooks = [{ key: 'events', label: { en: 'Events' } }];
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an invalid webhook key pattern', () => {
+      const manifest = buildManifest();
+      manifest.webhooks[0].key = 'Events';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject duplicate webhook keys', () => {
+      const manifest = buildManifest();
+      manifest.webhooks[1].key = 'events';
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.webhooks.1.key: duplicate key "events"']);
+    });
+
+    it('should reject a webhook without label', () => {
+      const manifest = buildManifest();
+      delete manifest.webhooks[0].label;
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a webhook label without english value', () => {
+      const manifest = buildManifest();
+      manifest.webhooks[0].label = { fr: 'Événements' };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an unknown webhook mode', () => {
+      const manifest = buildManifest();
+      manifest.webhooks[0].mode = 'async';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an unknown webhook property', () => {
+      const manifest = buildManifest();
+      manifest.webhooks[0].url = 'https://example.com/hook';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
   });

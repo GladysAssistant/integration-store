@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/manifest.schema.json",
   "title": "Gladys Assistant external integration manifest",
-  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys and action keys must be unique, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
+  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys and webhook keys must be unique, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["manifest_version", "type", "name", "description", "version", "docker_image", "gladys_version"],
@@ -15,7 +15,7 @@
     "type": {
       "type": "string",
       "enum": ["device", "communication"],
-      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) send and receive messages for linked users and only expose the Configuration screen."
+      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field."
     },
     "name": {
       "type": "string",
@@ -99,8 +99,88 @@
         "enum": ["local", "cloud"]
       },
       "description": "Channels the integration knows how to use. When both are declared, Gladys renders the standard core-translated \"Prefer local (LAN) connection\" toggle, stored as the reserved GLADYS_PREFER_LOCAL config key (boolean, default true) — readable by the integration, never writable by it. The preference is a wish; the per-device reality is reported through the GLADYS_TRANSPORT param."
+    },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receive"],
+      "description": "Family of a communication channel (contract B.15) — mandatory when `type` is \"communication\", forbidden otherwise. Sending is always present, receiving is not; the linking model, the endpoints and the install-screen warning level all follow from `receive`.",
+      "properties": {
+        "receive": {
+          "type": "boolean",
+          "description": "true: bidirectional chat channel (Telegram-like bot) — users link their account with a short code sent in the channel, and incoming messages carry the linked user's authority. false: send-only notification channel (Free Mobile/CallMeBot-like) — no incoming path exists (the host API guarantees it server-side), each user enters their own credentials in the \"My account\" block described by `contact_schema`."
+        }
+      }
+    },
+    "contact_schema": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Per-user identity of a send-only notification channel (contract B.15) — mandatory when `messaging.receive` is false, forbidden otherwise. Same flat field format and rules as `config_schema`; rendered as the \"My account\" block of the Configuration screen, where each user enters their own values (stored scoped to the user, passed to the integration with every outgoing message).",
+      "items": {
+        "$ref": "#/definitions/configField"
+      }
+    },
+    "webhooks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "description": "Incoming webhooks relayed by Gladys Plus (contract B.17): third parties push events from the Internet to a public per-webhook URL, and Gladys Plus relays them to the integration — shown on the install screen (\"may receive events from the Internet through Gladys Plus\"). The user pastes their Gladys Plus Open API key in the standard \"Gladys Plus webhooks\" block of the Configuration screen; the integration fetches the ready-to-register URLs through the host API.",
+      "items": {
+        "$ref": "#/definitions/webhook"
+      }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "communication"
+          }
+        }
+      },
+      "then": {
+        "required": ["messaging"]
+      },
+      "else": {
+        "allOf": [
+          {
+            "not": {
+              "required": ["messaging"]
+            }
+          },
+          {
+            "not": {
+              "required": ["contact_schema"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": ["messaging"],
+        "properties": {
+          "messaging": {
+            "required": ["receive"],
+            "properties": {
+              "receive": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["contact_schema"]
+      },
+      "else": {
+        "not": {
+          "required": ["contact_schema"]
+        }
+      }
+    }
+  ],
   "definitions": {
     "multiLanguageText": {
       "type": "object",
@@ -546,6 +626,28 @@
           }
         }
       ]
+    },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Unique key of the webhook: last segment of the public relay URL and identifier in the host API and SDK handlers."
+        },
+        "label": {
+          "$ref": "#/definitions/multiLanguageText",
+          "description": "Names the webhook in the install screen and in the \"Gladys Plus webhooks\" block."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["fire_and_forget", "sync"],
+          "default": "fire_and_forget",
+          "description": "`fire_and_forget` (default): the third party only awaits an acknowledgment — Gladys answers immediately and relays asynchronously (the Netatmo-style event stream). `sync`: the caller awaits the integration response (challenge/response registrations, Strava/Microsoft Graph style) — the handler's resolved { status (200-499), contentType, body (≤ 64 KB) } is returned verbatim through Gladys Plus."
+        }
+      }
     },
     "action": {
       "type": "object",
