@@ -71,7 +71,13 @@ describe('validateManifest', () => {
     expect(result.errors.join(' ')).to.include('must NOT have additional properties');
   });
 
-  it('should reject a type other than "device"', () => {
+  it('should accept a communication integration', () => {
+    const manifest = buildManifest();
+    manifest.type = 'communication';
+    expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should reject an unknown type', () => {
     const manifest = buildManifest();
     manifest.type = 'weather';
     const result = validateManifest(manifest);
@@ -164,74 +170,74 @@ describe('validateManifest', () => {
   describe('config_schema', () => {
     it('should reject an invalid key pattern', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].key = 'Latitude';
+      manifest.config_schema[1].key = 'Latitude';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject an unknown field type', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].type = 'textarea';
+      manifest.config_schema[1].type = 'textarea';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject a label without english value', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].label = { fr: 'Latitude' };
+      manifest.config_schema[1].label = { fr: 'Latitude' };
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject duplicate keys', () => {
       const manifest = buildManifest();
-      manifest.config_schema[1].key = 'latitude';
+      manifest.config_schema[2].key = 'latitude';
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.1.key: duplicate key "latitude"',
+        'manifest.config_schema.2.key: duplicate key "latitude"',
       ]);
     });
 
     it('should reject a select field without options', () => {
       const manifest = buildManifest();
-      delete manifest.config_schema[2].options;
-      delete manifest.config_schema[2].default;
+      delete manifest.config_schema[3].options;
+      delete manifest.config_schema[3].default;
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject options on a non-select field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].options = [{ value: 'a', label: { en: 'A' } }];
+      manifest.config_schema[1].options = [{ value: 'a', label: { en: 'A' } }];
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject min/max on a non-number field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[1].min = 0;
+      manifest.config_schema[2].min = 0;
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject min greater than max', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].min = 90;
-      manifest.config_schema[0].max = -90;
+      manifest.config_schema[1].min = 90;
+      manifest.config_schema[1].max = -90;
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.0.min: must be lower than or equal to max',
+        'manifest.config_schema.1.min: must be lower than or equal to max',
       ]);
     });
 
     it('should reject a default not matching a number field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].default = 'forty-eight';
-      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.0.default: must be a number']);
+      manifest.config_schema[1].default = 'forty-eight';
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.1.default: must be a number']);
     });
 
     it('should reject a default not matching a string field', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'city', type: 'string', label: { en: 'City' }, default: 42 });
-      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.3.default: must be a string']);
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.4.default: must be a string']);
     });
 
     it('should reject a default not matching a boolean field', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'enabled', type: 'boolean', label: { en: 'Enabled' }, default: 'yes' });
-      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.3.default: must be a boolean']);
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.4.default: must be a boolean']);
     });
 
     it('should accept a valid string, boolean and select default', () => {
@@ -243,23 +249,23 @@ describe('validateManifest', () => {
 
     it('should reject a select default outside the options', () => {
       const manifest = buildManifest();
-      manifest.config_schema[2].default = 'kelvin';
+      manifest.config_schema[3].default = 'kelvin';
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.2.default: must be one of the select options',
+        'manifest.config_schema.3.default: must be one of the select options',
       ]);
     });
 
     it('should reject a default on a secret field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[1].default = 's3cr3t';
+      manifest.config_schema[2].default = 's3cr3t';
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.1.default: not allowed for secret fields',
+        'manifest.config_schema.2.default: not allowed for secret fields',
       ]);
     });
 
     it('should reject an unknown property on a field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].icon = 'map-pin';
+      manifest.config_schema[1].icon = 'map-pin';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
@@ -276,13 +282,13 @@ describe('validateManifest', () => {
 
     it('should reject a placeholder that is not multi-language text', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].placeholder = '48.85';
+      manifest.config_schema[1].placeholder = '48.85';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject a placeholder without english value', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].placeholder = { fr: '48,85' };
+      manifest.config_schema[1].placeholder = { fr: '48,85' };
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
@@ -299,7 +305,7 @@ describe('validateManifest', () => {
 
     it('should reject a placeholder on a select field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[2].placeholder = { en: 'Pick a unit' };
+      manifest.config_schema[3].placeholder = { en: 'Pick a unit' };
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
@@ -334,7 +340,7 @@ describe('validateManifest', () => {
         options: [{ value: 'kitchen', label: { en: 'Kitchen' } }],
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.3.default: must be an array of the multi_select option values',
+        'manifest.config_schema.4.default: must be an array of the multi_select option values',
       ]);
     });
 
@@ -348,7 +354,7 @@ describe('validateManifest', () => {
         options: [{ value: 'kitchen', label: { en: 'Kitchen' } }],
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.3.default: must be an array of the multi_select option values',
+        'manifest.config_schema.4.default: must be an array of the multi_select option values',
       ]);
     });
 
@@ -362,7 +368,7 @@ describe('validateManifest', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'account', type: 'oauth2', label: { en: 'Account' }, default: 'me' });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.3.default: not allowed for oauth2 fields',
+        'manifest.config_schema.4.default: not allowed for oauth2 fields',
       ]);
     });
 
@@ -379,19 +385,127 @@ describe('validateManifest', () => {
 
     it('should accept a display on a select field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[2].display = 'radio';
+      manifest.config_schema[3].display = 'radio';
       expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
     });
 
     it('should reject an unknown display value', () => {
       const manifest = buildManifest();
-      manifest.config_schema[2].display = 'checkbox';
+      manifest.config_schema[3].display = 'checkbox';
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
     it('should reject a display on a non-select field', () => {
       const manifest = buildManifest();
-      manifest.config_schema[0].display = 'radio';
+      manifest.config_schema[1].display = 'radio';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should accept a select field with the "devices" dynamic source', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({ key: 'device', type: 'select', source: 'devices', label: { en: 'Device' } });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a multi_select field with the "devices" dynamic source', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'devices',
+        type: 'multi_select',
+        source: 'devices',
+        label: { en: 'Devices' },
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an unknown source value', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({ key: 'scene', type: 'select', source: 'scenes', label: { en: 'Scene' } });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a select field carrying both options and source', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[3].source = 'devices';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a source on a non-select field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[1].source = 'devices';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a default on a dynamic-source select', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'device',
+        type: 'select',
+        source: 'devices',
+        label: { en: 'Device' },
+        default: 'ext:demo:switch',
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.default: not allowed with a dynamic source',
+      ]);
+    });
+
+    it('should accept a section field with description and https links', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'outro',
+        type: 'section',
+        label: { en: 'Going further' },
+        description: { en: 'Advanced options for power users.' },
+        links: [{ url: 'https://example.com/guide', label: { en: 'Guide' } }],
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a section with a required, default or placeholder value', () => {
+      const withRequired = buildManifest();
+      withRequired.config_schema[0].required = true;
+      expect(validateManifest(withRequired).valid).to.equal(false);
+
+      const withDefault = buildManifest();
+      withDefault.config_schema[0].default = 'welcome';
+      expect(validateManifest(withDefault).valid).to.equal(false);
+
+      const withPlaceholder = buildManifest();
+      withPlaceholder.config_schema[0].placeholder = { en: 'welcome' };
+      expect(validateManifest(withPlaceholder).valid).to.equal(false);
+    });
+
+    it('should reject a section description over 1000 characters per language', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[0].description = { en: 'x'.repeat(1001) };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a non-https section link', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[0].links = [{ url: 'http://example.com', label: { en: 'Doc' } }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a section link without label', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[0].links = [{ url: 'https://example.com' }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject more than 5 section links', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[0].links = Array.from({ length: 6 }, (unused, i) => ({
+        url: `https://example.com/${i}`,
+        label: { en: `Link ${i}` },
+      }));
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject links on a non-section field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[1].links = [{ url: 'https://example.com', label: { en: 'Doc' } }];
       expect(validateManifest(manifest).valid).to.equal(false);
     });
   });
@@ -578,6 +692,24 @@ describe('validateManifest', () => {
       manifest.network_discovery = [{ type: 'mdns', service: '_hue._tcp', ports: [6666] }];
       expect(validateManifest(manifest).valid).to.equal(false);
     });
+
+    it('should accept an udp-active-broadcast capture with ports', () => {
+      const manifest = buildManifest();
+      manifest.network_discovery = [{ type: 'udp-active-broadcast', ports: [9999, 20002] }];
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an udp-active-broadcast capture without ports', () => {
+      const manifest = buildManifest();
+      manifest.network_discovery = [{ type: 'udp-active-broadcast' }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an udp-active-broadcast capture with a field of another type', () => {
+      const manifest = buildManifest();
+      manifest.network_discovery = [{ type: 'udp-active-broadcast', ports: [9999], st: 'urn:x' }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
   });
 
   describe('actions', () => {
@@ -618,7 +750,7 @@ describe('validateManifest', () => {
       const manifest = buildManifest();
       manifest.actions[0].fields.push({ key: 'host', type: 'string', label: { en: 'Host again' } });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.actions.0.fields.1.key: duplicate key "host"',
+        'manifest.actions.0.fields.2.key: duplicate key "host"',
       ]);
     });
 

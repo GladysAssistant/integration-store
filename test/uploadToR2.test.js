@@ -133,6 +133,8 @@ describe('uploadDirectory', () => {
     await writeFile(path.join(dir, 'covers', 'placeholder.png'), Buffer.from('png-bytes'));
     await writeFile(path.join(dir, 'covers', 'john--demo.jpg'), Buffer.from('jpg-bytes'));
     await writeFile(path.join(dir, 'covers', 'jane--demo.jpeg'), Buffer.from('jpeg-bytes'));
+    await mkdir(path.join(dir, 'docs', 'john--demo'), { recursive: true });
+    await writeFile(path.join(dir, 'docs', 'john--demo', 'en.md'), Buffer.from('# English docs'));
     await writeFile(path.join(dir, 'extra.bin'), Buffer.from('binary'));
   });
 
@@ -152,6 +154,7 @@ describe('uploadDirectory', () => {
       'covers/jane--demo.jpeg',
       'covers/john--demo.jpg',
       'covers/placeholder.png',
+      'docs/john--demo/en.md',
       'extra.bin',
       'index.json',
       'manifest.schema.json',
@@ -166,13 +169,14 @@ describe('uploadDirectory', () => {
     expect(byKey['covers/placeholder.png'].contentType).to.equal('image/png');
     expect(byKey['covers/john--demo.jpg'].contentType).to.equal('image/jpeg');
     expect(byKey['covers/jane--demo.jpeg'].contentType).to.equal('image/jpeg');
+    expect(byKey['docs/john--demo/en.md'].contentType).to.equal('text/markdown; charset=utf-8');
     expect(byKey['extra.bin'].contentType).to.equal('application/octet-stream');
 
     expect(byKey['index.json'].body.toString()).to.equal('{"index_format":1}');
     expect(byKey['covers/john--demo.jpg'].body.toString()).to.equal('jpg-bytes');
   });
 
-  it('should cache the index short and everything else long', async () => {
+  it('should cache the index short, the docs medium and everything else long', async () => {
     const uploads = [];
     const putObject = async (params) => {
       uploads.push(params);
@@ -185,6 +189,7 @@ describe('uploadDirectory', () => {
     expect(byKey['rejected.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['manifest.schema.json'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['covers/john--demo.jpg'].cacheControl).to.equal('public, max-age=86400');
+    expect(byKey['docs/john--demo/en.md'].cacheControl).to.equal('public, max-age=3600');
   });
 
   it('should default the logger to the console', async () => {
@@ -228,6 +233,7 @@ describe('uploadDirectory', () => {
     expect(uploaded).to.deep.equal([
       'covers/jane--demo.jpeg',
       'covers/placeholder.png',
+      'docs/john--demo/en.md',
       'extra.bin',
       'index.json',
       'manifest.schema.json',

@@ -18,16 +18,18 @@ function toJson(value) {
 }
 
 /**
- * Write everything GitHub Pages publishes: index.json, rejected.json, the
- * canonical manifest.schema.json, the re-hosted covers and the placeholder.
+ * Write everything the store publishes: index.json, rejected.json, the
+ * canonical manifest.schema.json, the re-hosted covers (and the placeholder)
+ * and the re-hosted documentation files.
  * @param {object} options - Options.
  * @param {string} options.outputDir - Destination directory.
  * @param {object} options.index - index.json content.
  * @param {object[]} options.rejected - rejected.json content.
  * @param {{fileName: string, data: Buffer}[]} options.coverFiles - Re-hosted covers.
+ * @param {{fileName: string, data: Buffer}[]} options.docsFiles - Re-hosted documentation files, fileName relative to docs/ (e.g. "john--demo/en.md").
  * @returns {Promise<void>} Resolves once everything is written.
  */
-export async function writeOutput({ outputDir, index, rejected, coverFiles }) {
+export async function writeOutput({ outputDir, index, rejected, coverFiles, docsFiles }) {
   const coversDir = path.join(outputDir, 'covers');
   await mkdir(coversDir, { recursive: true });
 
@@ -38,5 +40,12 @@ export async function writeOutput({ outputDir, index, rejected, coverFiles }) {
 
   for (const coverFile of coverFiles) {
     await writeFile(path.join(coversDir, coverFile.fileName), coverFile.data);
+  }
+
+  const docsDir = path.join(outputDir, 'docs');
+  for (const docsFile of docsFiles) {
+    const filePath = path.join(docsDir, ...docsFile.fileName.split('/'));
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, docsFile.data);
   }
 }

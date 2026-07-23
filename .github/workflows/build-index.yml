@@ -5,6 +5,7 @@
 # `gladys-assistant-integration` topic. This workflow crawls the topic every
 # hour, validates each manifest mechanically, and uploads index.json,
 # rejected.json, the canonical manifest.schema.json and the re-hosted covers
+# and documentation files
 # to R2 (S3-compatible object storage, served over a public URL / CDN).
 #
 # Required configuration (repository Settings → Secrets and variables → Actions):

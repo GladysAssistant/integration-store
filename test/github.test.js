@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 
-import { downloadCover, fetchManifestFile, searchRepositoriesByTopic } from '../src/github.js';
+import { downloadCover, fetchDocFile, fetchManifestFile, searchRepositoriesByTopic } from '../src/github.js';
 
 /**
  * Build a GitHub search API repository item.
@@ -264,6 +264,55 @@ describe('fetchManifestFile', () => {
     expect(await fetchManifestFile({ ...params, fetchFn })).to.deep.equal({
       status: 'error',
       reason: 'file too large (> 100 KB)',
+    });
+  });
+});
+
+describe('fetchDocFile', () => {
+  const params = { owner: 'john', repo: 'demo', defaultBranch: 'main', lang: 'en' };
+
+  it('should fetch the raw documentation file on the default branch', async () => {
+    let requestedUrl;
+    let requestOptions;
+    const fetchFn = async (url, options) => {
+      requestedUrl = url;
+      requestOptions = options;
+      return new Response('# My integration');
+    };
+    const result = await fetchDocFile({ ...params, fetchFn });
+    expect(result).to.deep.equal({ status: 'ok', raw: '# My integration' });
+    expect(requestedUrl).to.equal('https://raw.githubusercontent.com/john/demo/main/docs/en.md');
+    expect(requestOptions.signal).to.be.instanceOf(AbortSignal);
+  });
+
+  it('should report a missing documentation file as not_found', async () => {
+    const fetchFn = async () => new Response('Not Found', { status: 404 });
+    expect(await fetchDocFile({ ...params, fetchFn })).to.deep.equal({ status: 'not_found' });
+  });
+
+  it('should report other HTTP failures as errors', async () => {
+    const fetchFn = async () => new Response('oops', { status: 500 });
+    expect(await fetchDocFile({ ...params, fetchFn })).to.deep.equal({
+      status: 'error',
+      reason: 'download failed (HTTP 500)',
+    });
+  });
+
+  it('should report network failures as errors', async () => {
+    const fetchFn = async () => {
+      throw new Error('getaddrinfo ENOTFOUND raw.githubusercontent.com');
+    };
+    expect(await fetchDocFile({ ...params, fetchFn })).to.deep.equal({
+      status: 'error',
+      reason: 'download failed (getaddrinfo ENOTFOUND raw.githubusercontent.com)',
+    });
+  });
+
+  it('should reject a file too large to be a documentation page', async () => {
+    const fetchFn = async () => new Response('x'.repeat(201 * 1024));
+    expect(await fetchDocFile({ ...params, fetchFn })).to.deep.equal({
+      status: 'error',
+      reason: 'file too large (> 200 KB)',
     });
   });
 });

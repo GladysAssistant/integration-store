@@ -1,7 +1,7 @@
 import { buildIndex } from './buildIndex.js';
 import { checkDockerImage } from './checkDockerImage.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
-import { downloadCover, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
+import { downloadCover, fetchDocFile, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
 import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from './uploadToR2.js';
 import { writeOutput } from './writeOutput.js';
 
@@ -13,16 +13,17 @@ const token = process.env.GITHUB_TOKEN;
 const repositories = await searchRepositoriesByTopic({ topic, token });
 console.log(`Found ${repositories.length} public repositories tagged "${topic}".`);
 
-const { index, rejected, coverFiles } = await buildIndex({
+const { index, rejected, coverFiles, docsFiles } = await buildIndex({
   repositories,
   fetchManifestFile,
+  fetchDocFile,
   checkDockerImage,
   downloadCover,
   storeBaseUrl,
   now: new Date().toISOString(),
 });
 
-await writeOutput({ outputDir, index, rejected, coverFiles });
+await writeOutput({ outputDir, index, rejected, coverFiles, docsFiles });
 
 const errorCount = rejected.filter((entry) => entry.level === REJECTION_LEVELS.ERROR).length;
 const warningCount = rejected.length - errorCount;

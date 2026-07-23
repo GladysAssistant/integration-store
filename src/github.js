@@ -1,9 +1,11 @@
 import {
   COVER_DOWNLOAD_CAP_BYTES,
   COVER_MAX_BYTES,
+  DOCS_MAX_BYTES,
   MANIFEST_FILE_NAME,
   MANIFEST_MAX_BYTES,
   REQUEST_TIMEOUT_MS,
+  docsFilePath,
 } from './constants.js';
 import { isForbiddenHost } from './isForbiddenHost.js';
 
@@ -202,6 +204,43 @@ export async function fetchManifestFile({ owner, repo, defaultBranch, fetchFn = 
     const body = await readBodyWithCap(response, MANIFEST_MAX_BYTES);
     if (!body.ok) {
       return { status: 'error', reason: `file too large (> ${MANIFEST_MAX_BYTES / 1024} KB)` };
+    }
+    return { status: 'ok', raw: body.data.toString('utf8') };
+  } catch (e) {
+    return { status: 'error', reason: `download failed (${e.message})` };
+  }
+}
+
+/**
+ * Fetch a raw user documentation file (docs/<lang>.md) from a repository
+ * default branch. Same transport as the manifest: raw.githubusercontent, hard
+ * timeout, capped body size.
+ * @param {object} options - Options.
+ * @param {string} options.owner - Repository owner.
+ * @param {string} options.repo - Repository name.
+ * @param {string} options.defaultBranch - Default branch of the repository.
+ * @param {string} options.lang - Language code of the file (e.g. "en").
+ * @param {Function} [options.fetchFn] - fetch implementation, injectable for tests.
+ * @returns {Promise<{status: 'ok', raw: string}|{status: 'not_found'}|{status: 'error', reason: string}>} Result.
+ */
+export async function fetchDocFile({ owner, repo, defaultBranch, lang, fetchFn = fetch }) {
+  const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(
+    defaultBranch,
+  )}/${docsFilePath(lang)}`;
+  try {
+    const response = await fetchFn(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (response.status === 404) {
+      return { status: 'not_found' };
+    }
+    if (!response.ok) {
+      return { status: 'error', reason: `download failed (HTTP ${response.status})` };
+    }
+    const body = await readBodyWithCap(response, DOCS_MAX_BYTES);
+    if (!body.ok) {
+      return { status: 'error', reason: `file too large (> ${DOCS_MAX_BYTES / 1024} KB)` };
     }
     return { status: 'ok', raw: body.data.toString('utf8') };
   } catch (e) {

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,16 +45,28 @@ describe('validateLocalIntegration', () => {
     await Promise.all(temporaryDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
+  // Valid documentation content, comfortably above the 300 characters minimum.
+  const DOC_CONTENT = `# Demo integration\n\n${'Install the integration, configure your credentials and enjoy. '.repeat(6)}`;
+
   /**
-   * Write a manifest file in a fresh temporary directory.
-   * @param {string} content - Raw file content.
+   * Write a manifest file (and by default the mandatory docs/en.md and
+   * docs/fr.md) in a fresh temporary directory, mimicking an integration
+   * repository checkout.
+   * @param {string} content - Raw manifest file content.
+   * @param {object} [docs] - Map of language → docs file content; a language mapped to undefined is not written.
    * @returns {Promise<string>} Path of the written manifest.
    */
-  async function writeManifestFile(content) {
+  async function writeManifestFile(content, docs = { en: DOC_CONTENT, fr: DOC_CONTENT }) {
     const dir = await mkdtemp(join(tmpdir(), 'integration-store-test-'));
     temporaryDirs.push(dir);
     const manifestPath = join(dir, MANIFEST_FILE_NAME);
     await writeFile(manifestPath, content);
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    for (const [lang, docContent] of Object.entries(docs)) {
+      if (docContent !== undefined) {
+        await writeFile(join(dir, 'docs', `${lang}.md`), docContent);
+      }
+    }
     return manifestPath;
   }
 
@@ -82,6 +94,31 @@ describe('validateLocalIntegration', () => {
       downloadCover: workingCover,
     });
     expect(problems).to.deep.equal([]);
+  });
+
+  it('should report an error for each missing documentation file', async () => {
+    const manifestPath = await writeManifestFile(JSON.stringify(manifest()), { en: undefined, fr: undefined });
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.deep.equal([
+      { level: 'error', reason: 'docs/en.md: file not found — user documentation is mandatory' },
+      { level: 'error', reason: 'docs/fr.md: file not found — user documentation is mandatory' },
+    ]);
+  });
+
+  it('should report an error when a documentation file is too short', async () => {
+    const manifestPath = await writeManifestFile(JSON.stringify(manifest()), { en: DOC_CONTENT, fr: '  # TODO  ' });
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.deep.equal([
+      { level: 'error', reason: 'docs/fr.md: must hold at least 300 characters of user documentation' },
+    ]);
   });
 
   it('should report an error when the manifest file cannot be read', async () => {

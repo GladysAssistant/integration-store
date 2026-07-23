@@ -21,19 +21,26 @@ function contentTypeFor(key) {
   if (key.endsWith('.jpg') || key.endsWith('.jpeg')) {
     return 'image/jpeg';
   }
+  if (key.endsWith('.md')) {
+    return 'text/markdown; charset=utf-8';
+  }
   return 'application/octet-stream';
 }
 
 /**
  * Cache-Control to publish a file with. The index and rejection documents are
- * rebuilt on every crawl, so they get a short TTL; covers and the schema are
- * effectively immutable and can be cached hard.
+ * rebuilt on every crawl, so they get a short TTL; documentation pages keep a
+ * stable URL but their content follows the repository, so they get a medium
+ * TTL; covers and the schema are effectively immutable and can be cached hard.
  * @param {string} key - Object key.
  * @returns {string} Cache-Control header value.
  */
 function cacheControlFor(key) {
   if (key === 'index.json' || key === 'rejected.json') {
     return 'public, max-age=300';
+  }
+  if (key.startsWith('docs/')) {
+    return 'public, max-age=3600';
   }
   return 'public, max-age=86400';
 }
