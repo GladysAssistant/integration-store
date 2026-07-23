@@ -12,6 +12,18 @@
   "cover_image": "https://raw.githubusercontent.com/john/gladys-open-meteo-demo/main/cover.jpg",
   "config_schema": [
     {
+      "key": "intro",
+      "type": "section",
+      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "description": {
+        "en": "Create a developer account to get your API key.",
+        "fr": "Créez un compte développeur pour obtenir votre clé d'API."
+      },
+      "links": [
+        { "url": "https://open-meteo.com/en/docs", "label": { "en": "Open-Meteo docs", "fr": "Doc Open-Meteo" } }
+      ]
+    },
+    {
       "key": "latitude",
       "type": "number",
       "label": { "en": "Latitude", "fr": "Latitude" },
@@ -56,6 +68,7 @@
   ],
   "network_discovery": [
     { "type": "udp-broadcast", "ports": [6666, 6667] },
+    { "type": "udp-active-broadcast", "ports": [9999, 20002] },
     { "type": "mdns", "service": "_hue._tcp" },
     { "type": "ssdp", "st": "urn:schemas-upnp-org:device:basic:1" }
   ],
@@ -66,6 +79,7 @@
       "description": { "en": "Checks that the configured API key works." },
       "timeout_seconds": 30,
       "fields": [
+        { "key": "device", "type": "select", "source": "devices", "label": { "en": "Device" }, "required": true },
         { "key": "host", "type": "string", "label": { "en": "Host" }, "placeholder": { "en": "192.168.1.10" } }
       ]
     }

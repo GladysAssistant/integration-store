@@ -33,6 +33,11 @@ function validateConfigFieldDefault(field, path) {
   if (field.default === undefined) {
     return [];
   }
+  // A dynamic source has no options to validate a default against (the values
+  // are per-user device external_ids, unknown at publication time).
+  if (field.source !== undefined) {
+    return [`${path}.default: not allowed with a dynamic source`];
+  }
   switch (field.type) {
     case 'string':
       return typeof field.default === 'string' ? [] : [`${path}.default: must be a string`];
@@ -51,7 +56,8 @@ function validateConfigFieldDefault(field, path) {
         : [`${path}.default: must be an array of the multi_select option values`];
     }
     // secret: it would end up published in the store index ;
-    // oauth2: the value is the Connect flow, tokens live off-schema.
+    // oauth2: the value is the Connect flow, tokens live off-schema ;
+    // section: purely presentational, stores no value (also schema-rejected).
     default:
       return [`${path}.default: not allowed for ${field.type} fields`];
   }

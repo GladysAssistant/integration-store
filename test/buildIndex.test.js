@@ -57,6 +57,19 @@ function fakeCoverDownloader(responses = {}) {
   return async ({ url }) => responses[url] ?? { status: 'error', reason: 'download failed (HTTP 404)' };
 }
 
+// Valid documentation content, comfortably above the 300 characters minimum.
+const DOC_CONTENT = `# Demo integration\n\n${'Install the integration, configure your credentials and enjoy. '.repeat(6)}`;
+
+/**
+ * Fake documentation fetcher backed by a map of "owner/repo/lang" → result;
+ * any file not listed in the map is served as a valid documentation page.
+ * @param {object} responses - Map of "owner/repo/lang" → fetchDocFile result.
+ * @returns {Function} fetchDocFile-compatible function.
+ */
+function fakeDocFetcher(responses = {}) {
+  return async ({ owner, repo, lang }) => responses[`${owner}/${repo}/${lang}`] ?? { status: 'ok', raw: DOC_CONTENT };
+}
+
 /**
  * Fake Docker image checker backed by a map of reference → result.
  * @param {object} responses - Map of image reference → checkDockerImage result.
@@ -69,12 +82,13 @@ function fakeImageChecker(responses = {}) {
 describe('buildIndex', () => {
   it('should index a valid integration with its re-hosted cover', async () => {
     const goodManifest = manifest({ cover_image: 'https://example.com/cover.jpg' });
-    const { index, rejected, coverFiles } = await buildIndex({
+    const { index, rejected, coverFiles, docsFiles } = await buildIndex({
       repositories: [repository('john', 'gladys-open-meteo-demo')],
       fetchManifestFile: fakeManifestFetcher({
         'john/gladys-open-meteo-demo': { status: 'ok', raw: JSON.stringify(goodManifest) },
       }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
       }),
@@ -91,6 +105,10 @@ describe('buildIndex', () => {
           repo_url: 'https://github.com/john/gladys-open-meteo-demo',
           manifest: goodManifest,
           cover_url: `${STORE_BASE_URL}/covers/john--gladys-open-meteo-demo.jpg`,
+          docs: {
+            en: `${STORE_BASE_URL}/docs/john--gladys-open-meteo-demo/en.md`,
+            fr: `${STORE_BASE_URL}/docs/john--gladys-open-meteo-demo/fr.md`,
+          },
           github: {
             stars: 12,
             pushed_at: '2026-07-10T12:00:00.000Z',
@@ -101,6 +119,79 @@ describe('buildIndex', () => {
     });
     expect(rejected).to.deep.equal([]);
     expect(coverFiles.map((f) => f.fileName)).to.deep.equal(['john--gladys-open-meteo-demo.jpg']);
+    expect(docsFiles).to.deep.equal([
+      { fileName: 'john--gladys-open-meteo-demo/en.md', data: Buffer.from(DOC_CONTENT, 'utf8') },
+      { fileName: 'john--gladys-open-meteo-demo/fr.md', data: Buffer.from(DOC_CONTENT, 'utf8') },
+    ]);
+  });
+
+  it('should reject an integration whose documentation file is missing', async () => {
+    const goodManifest = manifest();
+    const { index, rejected, docsFiles } = await buildIndex({
+      repositories: [repository('nora', 'no-docs')],
+      fetchManifestFile: fakeManifestFetcher({ 'nora/no-docs': { status: 'ok', raw: JSON.stringify(goodManifest) } }),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher({ 'nora/no-docs/fr': { status: 'not_found' } }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.deep.equal([]);
+    expect(docsFiles).to.deep.equal([]);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'nora/no-docs',
+        level: 'error',
+        reason: 'docs/fr.md: file not found — user documentation is mandatory',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
+  it('should reject an integration whose documentation is too short', async () => {
+    const goodManifest = manifest();
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('nora', 'thin-docs')],
+      fetchManifestFile: fakeManifestFetcher({ 'nora/thin-docs': { status: 'ok', raw: JSON.stringify(goodManifest) } }),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher({ 'nora/thin-docs/en': { status: 'ok', raw: '  # TODO  ' } }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.deep.equal([]);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'nora/thin-docs',
+        level: 'error',
+        reason: 'docs/en.md: must hold at least 300 characters of user documentation',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
+  it('should reject an integration whose documentation fails to download', async () => {
+    const goodManifest = manifest();
+    const { index, rejected } = await buildIndex({
+      repositories: [repository('nora', 'flaky-docs')],
+      fetchManifestFile: fakeManifestFetcher({
+        'nora/flaky-docs': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher({ 'nora/flaky-docs/en': { status: 'error', reason: 'download failed (HTTP 500)' } }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.deep.equal([]);
+    expect(rejected).to.deep.equal([
+      {
+        store_slug: 'nora/flaky-docs',
+        level: 'error',
+        reason: 'docs/en.md: download failed (HTTP 500)',
+        checked_at: NOW,
+      },
+    ]);
   });
 
   it('should keep the png extension of a png cover', async () => {
@@ -109,6 +200,7 @@ describe('buildIndex', () => {
       repositories: [repository('john', 'demo')],
       fetchManifestFile: fakeManifestFetcher({ 'john/demo': { status: 'ok', raw: JSON.stringify(goodManifest) } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.png': { status: 'ok', data: createSolidPng(COVER_WIDTH, COVER_HEIGHT, [1, 2, 3]) },
       }),
@@ -126,6 +218,7 @@ describe('buildIndex', () => {
       repositories: [repository('bob', 'no-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'bob/no-cover': { status: 'ok', raw: JSON.stringify(noCover) } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -149,6 +242,7 @@ describe('buildIndex', () => {
       repositories: [repository('carol', 'bad-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'carol/bad-cover': { status: 'ok', raw: JSON.stringify(badCover) } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/big.jpg': { status: 'ok', data: createSolidPng(1200, 800, [0, 0, 0]) },
       }),
@@ -172,6 +266,7 @@ describe('buildIndex', () => {
       repositories: [repository('carol', 'gone-cover')],
       fetchManifestFile: fakeManifestFetcher({ 'carol/gone-cover': { status: 'ok', raw: JSON.stringify(badCover) } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -191,6 +286,7 @@ describe('buildIndex', () => {
       repositories: [repository('eve', 'no-manifest')],
       fetchManifestFile: fakeManifestFetcher({ 'eve/no-manifest': { status: 'not_found' } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -213,6 +309,7 @@ describe('buildIndex', () => {
         'heidi/flaky': { status: 'error', reason: 'download failed (HTTP 500)' },
       }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -232,6 +329,7 @@ describe('buildIndex', () => {
       repositories: [repository('frank', 'broken-json')],
       fetchManifestFile: fakeManifestFetcher({ 'frank/broken-json': { status: 'ok', raw: '{ not json' } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -252,6 +350,7 @@ describe('buildIndex', () => {
       repositories: [repository('dave', 'bad-semver')],
       fetchManifestFile: fakeManifestFetcher({ 'dave/bad-semver': { status: 'ok', raw: JSON.stringify(badManifest) } }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -279,6 +378,7 @@ describe('buildIndex', () => {
           reason: 'image not found on registry "ghcr.io" (HTTP 404)',
         },
       }),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -304,6 +404,7 @@ describe('buildIndex', () => {
       checkDockerImage: fakeImageChecker({
         [goodManifest.docker_image]: { status: 'unverified', reason: 'registry check failed (HTTP 503)' },
       }),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
       }),
@@ -334,6 +435,7 @@ describe('buildIndex', () => {
           reason: 'image not found on registry "registry-1.docker.io" (HTTP 404)',
         },
       }),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,
@@ -359,6 +461,7 @@ describe('buildIndex', () => {
       checkDockerImage: fakeImageChecker({
         [goodManifest.containers[0].docker_image]: { status: 'unverified', reason: 'registry check failed (HTTP 503)' },
       }),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader({
         'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
       }),
@@ -388,6 +491,7 @@ describe('buildIndex', () => {
         'adam/a-repo': { status: 'ok', raw: JSON.stringify(manifestA) },
       }),
       checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher(),
       downloadCover: fakeCoverDownloader(),
       storeBaseUrl: STORE_BASE_URL,
       now: NOW,

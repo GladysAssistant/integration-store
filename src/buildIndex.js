@@ -1,4 +1,12 @@
-import { INDEX_FORMAT, MANIFEST_FILE_NAME, PLACEHOLDER_COVER_FILE_NAME, REJECTION_LEVELS } from './constants.js';
+import {
+  DOCS_LANGUAGES,
+  DOCS_MIN_CHARS,
+  INDEX_FORMAT,
+  MANIFEST_FILE_NAME,
+  PLACEHOLDER_COVER_FILE_NAME,
+  REJECTION_LEVELS,
+  docsFilePath,
+} from './constants.js';
 import { validateCover } from './validateCover.js';
 import { validateManifest } from './validateManifest.js';
 
@@ -38,6 +46,43 @@ async function resolveManifest(repository, fetchManifestFile) {
 }
 
 /**
+ * Fetch and validate the mandatory user documentation (docs/en.md and
+ * docs/fr.md, B.9): both files must exist and hold at least DOCS_MIN_CHARS
+ * characters, otherwise the integration is rejected. Valid files are re-hosted
+ * next to the covers, and the index references the re-hosted URLs (C.6).
+ * @param {object} repository - Repository entry.
+ * @param {Function} fetchDocFile - Injected doc fetcher.
+ * @param {string} storeBaseUrl - Public base URL of the published store.
+ * @returns {Promise<{docs: object, docsFiles: {fileName: string, data: Buffer}[]}|{rejectionReason: string}>} Re-hosted URLs and files, or rejection reason.
+ */
+async function resolveDocs(repository, fetchDocFile, storeBaseUrl) {
+  const docs = {};
+  const docsFiles = [];
+  for (const lang of DOCS_LANGUAGES) {
+    const path = docsFilePath(lang);
+    const result = await fetchDocFile({
+      owner: repository.owner,
+      repo: repository.repo,
+      defaultBranch: repository.defaultBranch,
+      lang,
+    });
+    if (result.status === 'not_found') {
+      return { rejectionReason: `${path}: file not found — user documentation is mandatory` };
+    }
+    if (result.status === 'error') {
+      return { rejectionReason: `${path}: ${result.reason}` };
+    }
+    if (result.raw.trim().length < DOCS_MIN_CHARS) {
+      return { rejectionReason: `${path}: must hold at least ${DOCS_MIN_CHARS} characters of user documentation` };
+    }
+    const fileName = `${repository.owner}--${repository.repo}/${lang}.md`;
+    docs[lang] = `${storeBaseUrl}/docs/${fileName}`;
+    docsFiles.push({ fileName, data: Buffer.from(result.raw, 'utf8') });
+  }
+  return { docs, docsFiles };
+}
+
+/**
  * Download, validate and prepare the re-hosting of a cover. A missing or
  * invalid cover never rejects the integration: it gets the placeholder and a
  * warning is published in rejected.json (C.1).
@@ -73,23 +118,26 @@ async function resolveCover(repository, manifest, downloadCover, storeBaseUrl) {
 
 /**
  * Build the store index from the repositories tagged with the store topic:
- * fetch each manifest, validate it (schema + code rules), check that the
+ * fetch each manifest, validate it (schema + code rules), check the mandatory
+ * user documentation (docs/en.md + docs/fr.md, re-hosted), check that the
  * Docker images (main and sub-containers) actually exist on their registry,
  * validate and re-host each cover, and produce the deterministic
  * index.json / rejected.json contents
- * (C.6) plus the cover files to publish.
+ * (C.6) plus the cover and documentation files to publish.
  * @param {object} options - Options.
  * @param {object[]} options.repositories - Output of searchRepositoriesByTopic.
  * @param {Function} options.fetchManifestFile - Manifest fetcher (injectable for tests).
+ * @param {Function} options.fetchDocFile - Documentation fetcher (injectable for tests).
  * @param {Function} options.checkDockerImage - Docker image existence checker (injectable for tests).
  * @param {Function} options.downloadCover - Cover downloader (injectable for tests).
  * @param {string} options.storeBaseUrl - Public base URL of the published store, no trailing slash.
  * @param {string} options.now - ISO 8601 timestamp of the crawl (injected: keeps the output deterministic).
- * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[]}>} Build result.
+ * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[], docsFiles: {fileName: string, data: Buffer}[]}>} Build result.
  */
 export async function buildIndex({
   repositories,
   fetchManifestFile,
+  fetchDocFile,
   checkDockerImage,
   downloadCover,
   storeBaseUrl,
@@ -98,6 +146,7 @@ export async function buildIndex({
   const integrations = [];
   const rejected = [];
   const coverFiles = [];
+  const allDocsFiles = [];
 
   const sortedRepositories = [...repositories].sort((a, b) => a.storeSlug.localeCompare(b.storeSlug));
 
@@ -115,6 +164,18 @@ export async function buildIndex({
     const validation = validateManifest(manifest);
     if (!validation.valid) {
       reject(REJECTION_LEVELS.ERROR, validation.errors.join('; '));
+      continue;
+    }
+
+    // Mandatory user documentation (B.9): absent or too small → rejection. The
+    // fine structure of the files (template sections) stays conventional.
+    const {
+      docs,
+      docsFiles,
+      rejectionReason: docsRejectionReason,
+    } = await resolveDocs(repository, fetchDocFile, storeBaseUrl);
+    if (docsRejectionReason !== undefined) {
+      reject(REJECTION_LEVELS.ERROR, docsRejectionReason);
       continue;
     }
 
@@ -153,12 +214,14 @@ export async function buildIndex({
     if (coverFile !== null) {
       coverFiles.push(coverFile);
     }
+    allDocsFiles.push(...docsFiles);
 
     integrations.push({
       store_slug: repository.storeSlug,
       repo_url: repository.repoUrl,
       manifest,
       cover_url: coverUrl,
+      docs,
       github: {
         stars: repository.stars,
         pushed_at: repository.pushedAt,
@@ -171,5 +234,6 @@ export async function buildIndex({
     index: { index_format: INDEX_FORMAT, generated_at: now, integrations },
     rejected,
     coverFiles,
+    docsFiles: allDocsFiles,
   };
 }
