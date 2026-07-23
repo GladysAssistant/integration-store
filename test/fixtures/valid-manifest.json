@@ -72,6 +72,10 @@
     { "type": "mdns", "service": "_hue._tcp" },
     { "type": "ssdp", "st": "urn:schemas-upnp-org:device:basic:1" }
   ],
+  "webhooks": [
+    { "key": "events", "label": { "en": "Weather events", "fr": "Événements météo" }, "mode": "fire_and_forget" },
+    { "key": "callback", "label": { "en": "Subscription callback" }, "mode": "sync" }
+  ],
   "actions": [
     {
       "key": "test_connection",
