@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/manifest.schema.json",
   "title": "Gladys Assistant external integration manifest",
-  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys and webhook keys must be unique, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
+  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys and webhook keys must be unique, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container port names must be unique across the whole manifest, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments, and every `{{port:<name>}}` placeholder of a `section` text must reference a declared port name (never allowed in `contact_schema`). The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["manifest_version", "type", "name", "description", "version", "docker_image", "gladys_version"],
@@ -71,6 +71,10 @@
         "$ref": "#/definitions/subContainer"
       }
     },
+    "location": {
+      "type": "boolean",
+      "description": "Declare true to request access to the coordinates of the houses configured in Gladys (GET /house host API). The home location is sensitive personal data: the request is shown on the install screen as an authorization contract, and an integration that does not declare it gets a 403 (enforced server-side, same pattern as `network_discovery` and `webhooks`)."
+    },
     "network_discovery": {
       "type": "array",
       "minItems": 1,
@@ -115,9 +119,22 @@
     "contact_schema": {
       "type": "array",
       "minItems": 1,
-      "description": "Per-user identity of a send-only notification channel (contract B.15) — mandatory when `messaging.receive` is false, forbidden otherwise. Same flat field format and rules as `config_schema`; rendered as the \"My account\" block of the Configuration screen, where each user enters their own values (stored scoped to the user, passed to the integration with every outgoing message).",
+      "description": "Per-user identity of a send-only notification channel (contract B.15) — mandatory when `messaging.receive` is false, forbidden otherwise. Same flat field format and rules as `config_schema`, minus `oauth2` fields (the OAuth relay is integration-scoped, never per user) and minus the `{{port:<name>}}` placeholder (code-enforced); rendered as the \"My account\" block of the Configuration screen, where each user enters their own values (stored scoped to the user, passed to the integration with every outgoing message).",
       "items": {
-        "$ref": "#/definitions/configField"
+        "allOf": [
+          {
+            "$ref": "#/definitions/configField"
+          },
+          {
+            "properties": {
+              "type": {
+                "not": {
+                  "const": "oauth2"
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "webhooks": {
@@ -194,7 +211,7 @@
       }
     },
     "sectionText": {
-      "description": "Plain multi-language text of a `section` field: at most 1000 characters per language, no markdown nor HTML interpreted (declarative UI). The long step-by-step guide belongs to the mandatory repository documentation (docs/en.md, docs/fr.md).",
+      "description": "Plain multi-language text of a `section` field: at most 1000 characters per language, no markdown nor HTML interpreted (declarative UI). Two plain-text tokens are substituted by the Gladys frontend at render time: `{{gladys_host}}` (the hostname the browser currently uses to reach Gladys) and `{{port:<name>}}` (the host port assigned to the sub-container port carrying that `name`). The long step-by-step guide belongs to the mandatory repository documentation (docs/en.md, docs/fr.md).",
       "type": "object",
       "additionalProperties": {
         "type": "string",
@@ -477,6 +494,16 @@
               "label": {
                 "$ref": "#/definitions/multiLanguageText",
                 "description": "Names the \"Open\" link in the Gladys UI."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9_]{2,20}$",
+                "description": "Optional identifier of the port, unique across the whole manifest (code-enforced): it makes the host port assigned by Gladys referenceable by the `{{port:<name>}}` placeholder of the `section` texts. Pairs naturally with `browsable: false`: a port that opens no web UI but whose number the user still has to read."
+              },
+              "browsable": {
+                "type": "boolean",
+                "default": true,
+                "description": "true (default): the port serves a web UI, Gladys shows an \"Open\" link. false: the port serves no browser (a WebSocket endpoint waiting for devices, the OCPP case) — the supervision screen shows the assigned host port as a plain badge, without a link."
               }
             }
           }
