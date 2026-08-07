@@ -14,8 +14,8 @@
     },
     "type": {
       "type": "string",
-      "enum": ["device", "communication"],
-      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field."
+      "enum": ["device", "communication", "weather"],
+      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either — the type carries no specific manifest field, the optional capabilities (alerts, sunrise/sunset, UV index, provider images) are simply optional fields of the returned payload."
     },
     "name": {
       "type": "string",
