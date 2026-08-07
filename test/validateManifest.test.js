@@ -78,9 +78,15 @@ describe('validateManifest', () => {
     expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
   });
 
-  it('should reject an unknown type', () => {
+  it('should accept a weather integration', () => {
     const manifest = buildManifest();
     manifest.type = 'weather';
+    expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should reject an unknown type', () => {
+    const manifest = buildManifest();
+    manifest.type = 'camera';
     const result = validateManifest(manifest);
     expect(result.valid).to.equal(false);
     expect(result.errors.join(' ')).to.include('manifest.type');
@@ -743,6 +749,13 @@ describe('validateManifest', () => {
 
     it('should reject messaging on a device integration', () => {
       const manifest = buildManifest();
+      manifest.messaging = { receive: true };
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject messaging on a weather integration', () => {
+      const manifest = buildManifest();
+      manifest.type = 'weather';
       manifest.messaging = { receive: true };
       expect(validateManifest(manifest).valid).to.equal(false);
     });
