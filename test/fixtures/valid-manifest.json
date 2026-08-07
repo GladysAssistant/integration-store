@@ -59,13 +59,22 @@
       "start": "manual",
       "env": { "MOSQUITTO_LOG_DEST": "stdout" },
       "volumes": ["/mosquitto/config"],
-      "ports": [{ "container_port": 1883, "protocol": "tcp", "label": { "en": "MQTT broker", "fr": "Broker MQTT" } }],
+      "ports": [
+        {
+          "container_port": 1883,
+          "protocol": "tcp",
+          "label": { "en": "MQTT broker", "fr": "Broker MQTT" },
+          "name": "mqtt_broker",
+          "browsable": false
+        }
+      ],
       "devices": ["video"],
       "read_only": true,
       "memory_mb": 128,
       "cpu": 0.5
     }
   ],
+  "location": true,
   "network_discovery": [
     { "type": "udp-broadcast", "ports": [6666, 6667] },
     { "type": "udp-active-broadcast", "ports": [9999, 20002] },

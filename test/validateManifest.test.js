@@ -63,6 +63,24 @@ describe('validateManifest', () => {
     expect(result.errors.join(' ')).to.include('docker_image');
   });
 
+  it('should accept a manifest declaring or omitting the location authorization', () => {
+    const declared = buildManifest();
+    declared.location = false;
+    expect(validateManifest(declared)).to.deep.equal({ valid: true, errors: [] });
+
+    const undeclared = buildManifest();
+    delete undeclared.location;
+    expect(validateManifest(undeclared)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should reject a non-boolean location', () => {
+    const manifest = buildManifest();
+    manifest.location = 'yes';
+    const result = validateManifest(manifest);
+    expect(result.valid).to.equal(false);
+    expect(result.errors.join(' ')).to.include('manifest.location');
+  });
+
   it('should reject an unknown top-level field', () => {
     const manifest = buildManifest();
     manifest.permissions = ['network'];
@@ -622,6 +640,37 @@ describe('validateManifest', () => {
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
+    it('should accept a port without name nor browsable flag', () => {
+      const manifest = buildManifest();
+      delete manifest.containers[0].ports[0].name;
+      delete manifest.containers[0].ports[0].browsable;
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an invalid port name', () => {
+      const manifest = buildManifest();
+      manifest.containers[0].ports[0].name = 'MQTT-Broker';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a non-boolean browsable flag', () => {
+      const manifest = buildManifest();
+      manifest.containers[0].ports[0].browsable = 'yes';
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a duplicate port name across the whole manifest', () => {
+      const manifest = buildManifest();
+      manifest.containers.push({
+        name: 'redis',
+        docker_image: 'redis:7.2.4',
+        ports: [{ container_port: 6379, label: { en: 'Redis' }, name: 'mqtt_broker' }],
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.containers.1.ports.0.name: duplicate port name "mqtt_broker"',
+      ]);
+    });
+
     it('should reject an unknown hardware class', () => {
       const manifest = buildManifest();
       manifest.containers[0].devices = ['usb'];
@@ -818,6 +867,128 @@ describe('validateManifest', () => {
       expect(validateManifest(manifest).errors).to.deep.equal([
         'manifest.contact_schema.1.default: not allowed for secret fields',
       ]);
+    });
+
+    it('should reject an oauth2 field in the contact_schema', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema.push({ key: 'account', type: 'oauth2', label: { en: 'Account' } });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a {{port:<name>}} placeholder in a contact_schema section, declared or not', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema.push({
+        key: 'intro',
+        type: 'section',
+        label: { en: 'Your {{port:mqtt_broker}} account' },
+        description: { en: 'Reachable on {{port:unknown}}' },
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.contact_schema.2.label.en: {{port:mqtt_broker}} is not available in the per-user contact schema',
+        'manifest.contact_schema.2.description.en: {{port:unknown}} is not available in the per-user contact schema',
+      ]);
+    });
+
+    it('should accept a {{gladys_host}} placeholder in a contact_schema section', () => {
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema.push({
+        key: 'intro',
+        type: 'section',
+        label: { en: 'Your account' },
+        description: { en: 'Register the callback https://{{gladys_host}}/webhook in your provider.' },
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+  });
+
+  // The `label` and `description` of a `section` are substituted at render time
+  // by the Gladys frontend: `{{gladys_host}}` needs no declaration, while
+  // `{{port:<name>}}` must reference a port name declared by a sub-container.
+  describe('section text placeholders', () => {
+    /**
+     * Append a section field to the config_schema of a manifest.
+     * @param {object} manifest - The manifest to extend.
+     * @param {object} texts - The `label` and `description` of the section.
+     * @returns {object} The same manifest, for chaining.
+     */
+    function withSection(manifest, texts) {
+      manifest.config_schema.push({ key: 'setup', type: 'section', ...texts });
+      return manifest;
+    }
+
+    it('should accept a section referencing a declared port name', () => {
+      const manifest = withSection(buildManifest(), {
+        label: { en: 'Connect your devices' },
+        description: {
+          en: 'Point them to mqtt://{{gladys_host}}:{{port:mqtt_broker}}',
+          fr: 'Pointez-les vers mqtt://{{gladys_host}}:{{port:mqtt_broker}}',
+        },
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a section without description', () => {
+      const manifest = withSection(buildManifest(), { label: { en: 'Connect your devices' } });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a port placeholder referencing no declared port name', () => {
+      const manifest = withSection(buildManifest(), {
+        label: { en: 'Connect your devices' },
+        description: { en: 'Point them to ws://{{gladys_host}}:{{port:ocpp}}' },
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.description.en: {{port:ocpp}} does not reference any declared port name',
+      ]);
+    });
+
+    it('should reject a port placeholder in a section label, in every language', () => {
+      const manifest = withSection(buildManifest(), {
+        label: { en: 'Port {{port:ocpp}}', fr: 'Port {{port:ocpp}}' },
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.label.en: {{port:ocpp}} does not reference any declared port name',
+        'manifest.config_schema.4.label.fr: {{port:ocpp}} does not reference any declared port name',
+      ]);
+    });
+
+    it('should reject a port placeholder when the manifest declares no sub-container at all', () => {
+      const manifest = buildManifest();
+      delete manifest.containers;
+      withSection(manifest, {
+        label: { en: 'Connect your devices' },
+        description: { en: 'Point them to mqtt://{{port:mqtt_broker}}' },
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.description.en: {{port:mqtt_broker}} does not reference any declared port name',
+      ]);
+    });
+
+    it('should reject a port placeholder in the section of an action mini form', () => {
+      const manifest = buildManifest();
+      manifest.actions[0].fields.push({
+        key: 'setup',
+        type: 'section',
+        label: { en: 'Setup' },
+        description: { en: 'Point them to ws://{{port:ocpp}}' },
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.actions.0.fields.2.description.en: {{port:ocpp}} does not reference any declared port name',
+      ]);
+    });
+
+    it('should not interpret a placeholder outside a section field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema[1].description = { en: 'Latitude of {{port:ocpp}}, not substituted' };
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should not interpret a loosely written placeholder', () => {
+      const manifest = withSection(buildManifest(), {
+        label: { en: 'Connect your devices' },
+        description: { en: 'Neither {{ port:ocpp }} nor {{port:OCPP}} is a placeholder.' },
+      });
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
     });
   });
 
