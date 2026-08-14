@@ -96,6 +96,46 @@ describe('validateLocalIntegration', () => {
     expect(problems).to.deep.equal([]);
   });
 
+  it('should warn when the manifest declares no categories', async () => {
+    const withoutCategories = manifest();
+    delete withoutCategories.categories;
+    const manifestPath = await writeManifestFile(JSON.stringify(withoutCategories));
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.have.lengthOf(1);
+    expect(problems[0].level).to.equal('warning');
+    expect(problems[0].reason).to.include('categories: not declared');
+  });
+
+  it('should warn about the category keys the indexer would drop', async () => {
+    const withUnknownKey = manifest({ categories: ['environment', 'spaceships'] });
+    const manifestPath = await writeManifestFile(JSON.stringify(withUnknownKey));
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.have.lengthOf(1);
+    expect(problems[0].level).to.equal('warning');
+    expect(problems[0].reason).to.include('unknown key(s) "spaceships"');
+  });
+
+  it('should warn that the integration would be uncategorized when every declared key is unknown', async () => {
+    const allUnknown = manifest({ categories: ['spaceships'] });
+    const manifestPath = await writeManifestFile(JSON.stringify(allUnknown));
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.have.lengthOf(2);
+    expect(problems.every((problem) => problem.level === 'warning')).to.equal(true);
+    expect(problems[1].reason).to.include('uncategorized');
+  });
+
   it('should report an error for each missing documentation file', async () => {
     const manifestPath = await writeManifestFile(JSON.stringify(manifest()), { en: undefined, fr: undefined });
     const { problems } = await validateLocalIntegration({

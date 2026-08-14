@@ -25,6 +25,7 @@ function repository(owner, repo) {
     repoUrl: `https://github.com/${owner}/${repo}`,
     defaultBranch: 'main',
     stars: 12,
+    createdAt: '2026-01-05T09:00:00.000Z',
     pushedAt: '2026-07-10T12:00:00.000Z',
     ownerAvatarUrl: `https://avatars.githubusercontent.com/${owner}`,
   };
@@ -114,6 +115,8 @@ describe('buildIndex', () => {
             pushed_at: '2026-07-10T12:00:00.000Z',
             owner_avatar_url: 'https://avatars.githubusercontent.com/john',
           },
+          categories: ['environment'],
+          first_seen_at: NOW,
         },
       ],
     });
@@ -477,6 +480,158 @@ describe('buildIndex', () => {
         checked_at: NOW,
       },
     ]);
+  });
+
+  describe('categories', () => {
+    /**
+     * Build the fetcher set of a single-repository run.
+     * @param {string} slug - "owner/repo" of the repository.
+     * @param {object} manifestContent - Manifest served for the repository.
+     * @returns {object} buildIndex options minus repositories.
+     */
+    function fetchersFor(slug, manifestContent) {
+      return {
+        fetchManifestFile: fakeManifestFetcher({ [slug]: { status: 'ok', raw: JSON.stringify(manifestContent) } }),
+        checkDockerImage: fakeImageChecker(),
+        fetchDocFile: fakeDocFetcher(),
+        downloadCover: fakeCoverDownloader(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+      };
+    }
+
+    it('should drop unknown manifest keys with a warning but publish the manifest verbatim', async () => {
+      const newerVocabulary = manifest({ categories: ['environment', 'spaceships'] });
+      delete newerVocabulary.cover_image;
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('john', 'newer-vocabulary')],
+        ...fetchersFor('john/newer-vocabulary', newerVocabulary),
+      });
+      expect(index.integrations[0].categories).to.deep.equal(['environment']);
+      // The manifest is published verbatim: each Gladys core re-filters
+      // against the vocabulary it knows at install time.
+      expect(index.integrations[0].manifest.categories).to.deep.equal(['environment', 'spaceships']);
+      const reasons = rejected.map((entry) => entry.reason);
+      expect(reasons.some((reason) => reason.includes('unknown key(s) "spaceships" dropped'))).to.equal(true);
+      expect(rejected.every((entry) => entry.level === 'warning')).to.equal(true);
+    });
+
+    it('should categorize a manifest declaring nothing through the fallback mapping, without warning', async () => {
+      const legacyManifest = manifest({ cover_image: 'https://example.com/cover.jpg' });
+      delete legacyManifest.categories;
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('john', 'legacy')],
+        ...fetchersFor('john/legacy', legacyManifest),
+        downloadCover: fakeCoverDownloader({
+          'https://example.com/cover.jpg': { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
+        }),
+        categoryFallback: { 'john/legacy': ['climate', 'energy'] },
+      });
+      expect(index.integrations[0].categories).to.deep.equal(['climate', 'energy']);
+      expect(rejected).to.deep.equal([]);
+    });
+
+    it('should index an uncategorized integration with an author-facing warning', async () => {
+      const uncategorizedManifest = manifest();
+      delete uncategorizedManifest.categories;
+      delete uncategorizedManifest.cover_image;
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('john', 'uncategorized')],
+        ...fetchersFor('john/uncategorized', uncategorizedManifest),
+      });
+      expect(index.integrations[0].categories).to.deep.equal([]);
+      const reasons = rejected.map((entry) => entry.reason);
+      expect(reasons.some((reason) => reason.includes('uncategorized'))).to.equal(true);
+      expect(rejected.every((entry) => entry.level === 'warning')).to.equal(true);
+    });
+  });
+
+  describe('first_seen_at', () => {
+    const noCoverManifest = () => {
+      const m = manifest();
+      delete m.cover_image;
+      return m;
+    };
+
+    /**
+     * Build the buildIndex options of a single-repository run.
+     * @param {object} repo - Repository entry.
+     * @returns {object} buildIndex options minus previousIndex.
+     */
+    function optionsFor(repo) {
+      return {
+        repositories: [repo],
+        fetchManifestFile: fakeManifestFetcher({
+          [repo.storeSlug]: { status: 'ok', raw: JSON.stringify(noCoverManifest()) },
+        }),
+        checkDockerImage: fakeImageChecker(),
+        fetchDocFile: fakeDocFetcher(),
+        downloadCover: fakeCoverDownloader(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+      };
+    }
+
+    it('should stamp a slug the previous index does not know with the crawl date', async () => {
+      const { index } = await buildIndex({
+        ...optionsFor(repository('john', 'brand-new')),
+        previousIndex: { generated_at: '2026-07-13T07:00:00.000Z', integrations: [] },
+      });
+      expect(index.integrations[0].first_seen_at).to.equal(NOW);
+    });
+
+    it('should carry the first_seen_at of the previous index over, never recomputing it', async () => {
+      const { index } = await buildIndex({
+        ...optionsFor(repository('john', 'already-indexed')),
+        previousIndex: {
+          generated_at: '2026-07-13T07:00:00.000Z',
+          integrations: [{ store_slug: 'john/already-indexed', first_seen_at: '2026-03-01T00:00:00.000Z' }],
+        },
+      });
+      expect(index.integrations[0].first_seen_at).to.equal('2026-03-01T00:00:00.000Z');
+    });
+
+    it('should backfill an entry predating the field from the repository creation date', async () => {
+      const { index } = await buildIndex({
+        ...optionsFor(repository('john', 'pre-phase-a')),
+        previousIndex: {
+          generated_at: '2026-07-13T07:00:00.000Z',
+          integrations: [{ store_slug: 'john/pre-phase-a' }],
+        },
+      });
+      expect(index.integrations[0].first_seen_at).to.equal('2026-01-05T09:00:00.000Z');
+    });
+
+    it('should backfill from the previous index generated_at when the creation date is unavailable', async () => {
+      const repo = repository('john', 'pre-phase-a');
+      delete repo.createdAt;
+      const { index } = await buildIndex({
+        ...optionsFor(repo),
+        previousIndex: {
+          generated_at: '2026-07-13T07:00:00.000Z',
+          integrations: [{ store_slug: 'john/pre-phase-a' }],
+        },
+      });
+      expect(index.integrations[0].first_seen_at).to.equal('2026-07-13T07:00:00.000Z');
+    });
+
+    it('should backfill with the crawl date as a last resort', async () => {
+      const repo = repository('john', 'pre-phase-a');
+      delete repo.createdAt;
+      const { index } = await buildIndex({
+        ...optionsFor(repo),
+        previousIndex: { integrations: [{ store_slug: 'john/pre-phase-a' }] },
+      });
+      expect(index.integrations[0].first_seen_at).to.equal(NOW);
+    });
+
+    it('should stamp every entry with the crawl date when no index was ever published', async () => {
+      const { index } = await buildIndex({
+        ...optionsFor(repository('john', 'first-crawl')),
+        previousIndex: null,
+      });
+      expect(index.integrations[0].first_seen_at).to.equal(NOW);
+    });
   });
 
   it('should produce a deterministic output sorted by store_slug regardless of input order', async () => {

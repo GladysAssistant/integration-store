@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import semver from 'semver';
 
-import { SUPPORTED_MANIFEST_VERSION } from './constants.js';
+import { CATEGORIES_MIN_GLADYS_VERSION, SUPPORTED_MANIFEST_VERSION } from './constants.js';
 import { isValidDockerImageReference } from './parseDockerImageReference.js';
 
 const schemaPath = fileURLToPath(new URL('../schemas/manifest.schema.json', import.meta.url));
@@ -61,7 +61,8 @@ function validateConfigFieldDefault(field, path) {
         : [`${path}.default: must be an array of the multi_select option values`];
     }
     // secret: it would end up published in the store index ;
-    // oauth2: the value is the Connect flow, tokens live off-schema ;
+    // oauth2 / account_link: the value is the Connect flow, the credentials
+    // live off-schema ;
     // section: purely presentational, stores no value (also schema-rejected).
     default:
       return [`${path}.default: not allowed for ${field.type} fields`];
@@ -304,6 +305,19 @@ export function validateManifest(manifest) {
   }
   if (semver.validRange(manifest.gladys_version) === null) {
     errors.push('manifest.gladys_version: must be a valid semver range');
+  } else if (manifest.categories !== undefined) {
+    // Older cores validate manifests with a strict field allowlist and reject
+    // any unknown top-level field at install/update time: declaring
+    // `categories` therefore requires a range no older core satisfies, which
+    // turns a cryptic install failure on old instances into the standard
+    // "requires Gladys ≥ X" catalog filter.
+    const minimumVersion = semver.minVersion(manifest.gladys_version);
+    if (minimumVersion === null || semver.lt(minimumVersion, CATEGORIES_MIN_GLADYS_VERSION)) {
+      errors.push(
+        `manifest.gladys_version: declaring categories requires ">=${CATEGORIES_MIN_GLADYS_VERSION}"` +
+          ` at minimum (older Gladys releases reject manifests carrying unknown fields)`,
+      );
+    }
   }
   if (!isValidDockerImageReference(manifest.docker_image)) {
     errors.push('manifest.docker_image: must be a valid image reference with an explicit tag or digest');

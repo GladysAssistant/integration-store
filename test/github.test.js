@@ -15,6 +15,7 @@ function searchItem(owner, repo) {
     html_url: `https://github.com/${owner}/${repo}`,
     default_branch: 'main',
     stargazers_count: 12,
+    created_at: '2026-01-05T09:00:00Z',
     pushed_at: '2026-07-10T12:00:00Z',
     owner: { login: owner, avatar_url: `https://avatars.githubusercontent.com/${owner}` },
   };
@@ -42,6 +43,7 @@ describe('searchRepositoriesByTopic', () => {
         repoUrl: 'https://github.com/john/demo',
         defaultBranch: 'main',
         stars: 12,
+        createdAt: '2026-01-05T09:00:00Z',
         pushedAt: '2026-07-10T12:00:00Z',
         ownerAvatarUrl: 'https://avatars.githubusercontent.com/john',
       },

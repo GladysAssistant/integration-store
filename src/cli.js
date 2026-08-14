@@ -1,7 +1,9 @@
 import { buildIndex } from './buildIndex.js';
+import { loadCategoryFallback } from './categories.js';
 import { checkDockerImage } from './checkDockerImage.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchDocFile, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
+import { fetchPreviousIndex } from './previousIndex.js';
 import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from './uploadToR2.js';
 import { writeOutput } from './writeOutput.js';
 
@@ -13,6 +15,16 @@ const token = process.env.GITHUB_TOKEN;
 const repositories = await searchRepositoriesByTopic({ topic, token });
 console.log(`Found ${repositories.length} public repositories tagged "${topic}".`);
 
+// The previous index carries the first_seen_at of every already-indexed
+// integration: fetched before rebuilding so the dates survive every crawl
+// ("Newest first" sort). null on the very first crawl of a fresh store.
+const previousIndex = await fetchPreviousIndex({ storeBaseUrl });
+console.log(
+  previousIndex === null
+    ? 'No previous index published: every integration is first seen by this crawl.'
+    : `Previous index fetched (${previousIndex.integrations.length} entries): first_seen_at carried over.`,
+);
+
 const { index, rejected, coverFiles, docsFiles } = await buildIndex({
   repositories,
   fetchManifestFile,
@@ -21,6 +33,8 @@ const { index, rejected, coverFiles, docsFiles } = await buildIndex({
   downloadCover,
   storeBaseUrl,
   now: new Date().toISOString(),
+  categoryFallback: loadCategoryFallback(),
+  previousIndex,
 });
 
 await writeOutput({ outputDir, index, rejected, coverFiles, docsFiles });

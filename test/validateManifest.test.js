@@ -81,6 +81,24 @@ describe('validateManifest', () => {
     expect(result.errors.join(' ')).to.include('manifest.location');
   });
 
+  it('should accept a manifest declaring or omitting the network_wake authorization', () => {
+    const declared = buildManifest();
+    declared.network_wake = false;
+    expect(validateManifest(declared)).to.deep.equal({ valid: true, errors: [] });
+
+    const undeclared = buildManifest();
+    delete undeclared.network_wake;
+    expect(validateManifest(undeclared)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should reject a non-boolean network_wake', () => {
+    const manifest = buildManifest();
+    manifest.network_wake = 'yes';
+    const result = validateManifest(manifest);
+    expect(result.valid).to.equal(false);
+    expect(result.errors.join(' ')).to.include('manifest.network_wake');
+  });
+
   it('should reject an unknown top-level field', () => {
     const manifest = buildManifest();
     manifest.permissions = ['network'];
@@ -256,13 +274,13 @@ describe('validateManifest', () => {
     it('should reject a default not matching a string field', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'city', type: 'string', label: { en: 'City' }, default: 42 });
-      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.4.default: must be a string']);
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.5.default: must be a string']);
     });
 
     it('should reject a default not matching a boolean field', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'enabled', type: 'boolean', label: { en: 'Enabled' }, default: 'yes' });
-      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.4.default: must be a boolean']);
+      expect(validateManifest(manifest).errors).to.deep.equal(['manifest.config_schema.5.default: must be a boolean']);
     });
 
     it('should accept a valid string, boolean and select default', () => {
@@ -365,7 +383,7 @@ describe('validateManifest', () => {
         options: [{ value: 'kitchen', label: { en: 'Kitchen' } }],
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.default: must be an array of the multi_select option values',
+        'manifest.config_schema.5.default: must be an array of the multi_select option values',
       ]);
     });
 
@@ -379,7 +397,7 @@ describe('validateManifest', () => {
         options: [{ value: 'kitchen', label: { en: 'Kitchen' } }],
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.default: must be an array of the multi_select option values',
+        'manifest.config_schema.5.default: must be an array of the multi_select option values',
       ]);
     });
 
@@ -393,7 +411,7 @@ describe('validateManifest', () => {
       const manifest = buildManifest();
       manifest.config_schema.push({ key: 'account', type: 'oauth2', label: { en: 'Account' }, default: 'me' });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.default: not allowed for oauth2 fields',
+        'manifest.config_schema.5.default: not allowed for oauth2 fields',
       ]);
     });
 
@@ -403,6 +421,25 @@ describe('validateManifest', () => {
         key: 'account',
         type: 'oauth2',
         label: { en: 'Account' },
+        placeholder: { en: 'you@example.com' },
+      });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject a default on an account_link field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({ key: 'vendor', type: 'account_link', label: { en: 'Vendor' }, default: 'me' });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.5.default: not allowed for account_link fields',
+      ]);
+    });
+
+    it('should reject a placeholder on an account_link field', () => {
+      const manifest = buildManifest();
+      manifest.config_schema.push({
+        key: 'vendor',
+        type: 'account_link',
+        label: { en: 'Vendor' },
         placeholder: { en: 'you@example.com' },
       });
       expect(validateManifest(manifest).valid).to.equal(false);
@@ -471,7 +508,7 @@ describe('validateManifest', () => {
         default: 'ext:demo:switch',
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.default: not allowed with a dynamic source',
+        'manifest.config_schema.5.default: not allowed with a dynamic source',
       ]);
     });
 
@@ -532,6 +569,88 @@ describe('validateManifest', () => {
       const manifest = buildManifest();
       manifest.config_schema[1].links = [{ url: 'https://example.com', label: { en: 'Doc' } }];
       expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('categories', () => {
+    it('should accept 1 to 3 unique non-empty strings, without any vocabulary enum in the schema', () => {
+      const manifest = buildManifest();
+      // An unknown key passes the schema on purpose: the vocabulary stage
+      // filters in code (unknown keys dropped with a warning, never a
+      // rejection), so a newer vocabulary than this indexer still validates.
+      manifest.categories = ['climate', 'energy', 'brand-new-key'];
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an empty categories array', () => {
+      const manifest = buildManifest();
+      manifest.categories = [];
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.categories');
+    });
+
+    it('should reject more than 3 categories', () => {
+      const manifest = buildManifest();
+      manifest.categories = ['climate', 'lighting', 'energy', 'security'];
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.categories');
+    });
+
+    it('should reject duplicate categories', () => {
+      const manifest = buildManifest();
+      manifest.categories = ['climate', 'climate'];
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.categories');
+    });
+
+    it('should reject a non-string or empty category key', () => {
+      const withNumber = buildManifest();
+      withNumber.categories = ['climate', 3];
+      expect(validateManifest(withNumber).valid).to.equal(false);
+
+      const withEmpty = buildManifest();
+      withEmpty.categories = [''];
+      expect(validateManifest(withEmpty).valid).to.equal(false);
+    });
+
+    it('should reject categories on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildManifest();
+      manifest.gladys_version = '>=4.62.0';
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.gladys_version: declaring categories requires ">=4.86.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+        ],
+      });
+    });
+
+    it('should reject categories on a valid but unsatisfiable gladys_version range', () => {
+      const manifest = buildManifest();
+      // A valid range no version satisfies: semver.minVersion() returns null.
+      manifest.gladys_version = '<0.0.0';
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('declaring categories requires ">=4.86.0"');
+    });
+
+    it('should accept an old gladys_version range when no categories are declared', () => {
+      const manifest = buildManifest();
+      delete manifest.categories;
+      manifest.gladys_version = '>=4.62.0';
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should not report the version gate when the gladys_version range is already invalid', () => {
+      const manifest = buildManifest();
+      manifest.gladys_version = 'not-a-range';
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: ['manifest.gladys_version: must be a valid semver range'],
+      });
     });
   });
 
@@ -875,6 +994,13 @@ describe('validateManifest', () => {
       expect(validateManifest(manifest).valid).to.equal(false);
     });
 
+    it('should reject an account_link field in the contact_schema', () => {
+      // Like oauth2: linking a provider account is integration-scoped, never per user.
+      const manifest = buildSendOnlyManifest();
+      manifest.contact_schema.push({ key: 'vendor', type: 'account_link', label: { en: 'Vendor' } });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
     it('should reject a {{port:<name>}} placeholder in a contact_schema section, declared or not', () => {
       const manifest = buildSendOnlyManifest();
       manifest.contact_schema.push({
@@ -938,7 +1064,7 @@ describe('validateManifest', () => {
         description: { en: 'Point them to ws://{{gladys_host}}:{{port:ocpp}}' },
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.description.en: {{port:ocpp}} does not reference any declared port name',
+        'manifest.config_schema.5.description.en: {{port:ocpp}} does not reference any declared port name',
       ]);
     });
 
@@ -947,8 +1073,8 @@ describe('validateManifest', () => {
         label: { en: 'Port {{port:ocpp}}', fr: 'Port {{port:ocpp}}' },
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.label.en: {{port:ocpp}} does not reference any declared port name',
-        'manifest.config_schema.4.label.fr: {{port:ocpp}} does not reference any declared port name',
+        'manifest.config_schema.5.label.en: {{port:ocpp}} does not reference any declared port name',
+        'manifest.config_schema.5.label.fr: {{port:ocpp}} does not reference any declared port name',
       ]);
     });
 
@@ -960,7 +1086,7 @@ describe('validateManifest', () => {
         description: { en: 'Point them to mqtt://{{port:mqtt_broker}}' },
       });
       expect(validateManifest(manifest).errors).to.deep.equal([
-        'manifest.config_schema.4.description.en: {{port:mqtt_broker}} does not reference any declared port name',
+        'manifest.config_schema.5.description.en: {{port:mqtt_broker}} does not reference any declared port name',
       ]);
     });
 
