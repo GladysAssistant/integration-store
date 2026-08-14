@@ -40,6 +40,37 @@ export function docsFilePath(lang) {
   return `docs/${lang}.md`;
 }
 
+// Controlled vocabulary of the catalog browse categories
+// (integration-catalog-categories.md §3). The manifest schema deliberately
+// carries no enum: the schema rejects the shape only, and this list filters
+// as a second stage — unknown keys are dropped with a warning, never a
+// rejection, so a manifest published with a newer vocabulary than a running
+// Gladys instance still installs. Adding a key here follows the governance
+// rules of the spec (≥3 concrete candidate integrations, same-diff update of
+// the core enum and of the spec).
+export const INTEGRATION_CATALOG_CATEGORIES = [
+  'climate',
+  'lighting',
+  'energy',
+  'security',
+  'multimedia',
+  'appliances',
+  'environment',
+  'protocols',
+  'network',
+  'notifications',
+  'assistants',
+  'services',
+];
+
+// First Gladys release whose manifest validator accepts the `categories`
+// field. Older cores validate manifests with a strict field allowlist and
+// reject any unknown top-level field at install/update time: a manifest
+// declaring `categories` must therefore require at least this version, which
+// turns a cryptic install failure into the standard "requires Gladys ≥ X"
+// catalog filter.
+export const CATEGORIES_MIN_GLADYS_VERSION = '4.86.0';
+
 // Timeout of every outbound HTTP request: a slow host must fail fast, not
 // hang the whole indexing run.
 export const REQUEST_TIMEOUT_MS = 30 * 1000;

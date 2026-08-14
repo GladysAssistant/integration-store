@@ -1,3 +1,4 @@
+import { resolveCategories } from './categories.js';
 import {
   DOCS_LANGUAGES,
   DOCS_MIN_CHARS,
@@ -117,6 +118,34 @@ async function resolveCover(repository, manifest, downloadCover, storeBaseUrl) {
 }
 
 /**
+ * First indexing date of a store_slug ("Newest first" sort,
+ * integration-catalog-categories.md §4): carried over from the previous
+ * index, never recomputed. A slug the previous index does not know is first
+ * indexed by this very crawl (its date is `now`); a slug it knows without a
+ * `first_seen_at` predates the persistence of the field, and is backfilled
+ * once from the repository creation date — always present in the GitHub
+ * search payload, which is why the spec's next fallback (the first commit
+ * date) is never needed — else from the previous index's own `generated_at`
+ * (the closest known "it was already indexed by then" instant). Deliberately
+ * never `github.pushed_at`: a documentation commit would reshuffle the sort.
+ * @param {object} repository - Repository entry.
+ * @param {object|null} previousIndex - Index published by the previous crawl.
+ * @param {Map<string, object>} previousEntries - Previous index entries by store_slug.
+ * @param {string} now - ISO 8601 timestamp of the crawl.
+ * @returns {string} ISO 8601 first indexing date.
+ */
+function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
+  const previousEntry = previousEntries.get(repository.storeSlug);
+  if (previousEntry === undefined) {
+    return now;
+  }
+  if (typeof previousEntry.first_seen_at === 'string') {
+    return previousEntry.first_seen_at;
+  }
+  return repository.createdAt ?? previousIndex.generated_at ?? now;
+}
+
+/**
  * Build the store index from the repositories tagged with the store topic:
  * fetch each manifest, validate it (schema + code rules), check the mandatory
  * user documentation (docs/en.md + docs/fr.md, re-hosted), check that the
@@ -132,6 +161,8 @@ async function resolveCover(repository, manifest, downloadCover, storeBaseUrl) {
  * @param {Function} options.downloadCover - Cover downloader (injectable for tests).
  * @param {string} options.storeBaseUrl - Public base URL of the published store, no trailing slash.
  * @param {string} options.now - ISO 8601 timestamp of the crawl (injected: keeps the output deterministic).
+ * @param {object} options.categoryFallback - Map of store_slug → fallback categories (data/category-fallback.json).
+ * @param {object|null} options.previousIndex - Index published by the previous crawl (first_seen_at continuity), null when none exists yet.
  * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[], docsFiles: {fileName: string, data: Buffer}[]}>} Build result.
  */
 export async function buildIndex({
@@ -142,11 +173,14 @@ export async function buildIndex({
   downloadCover,
   storeBaseUrl,
   now,
+  categoryFallback = {},
+  previousIndex = null,
 }) {
   const integrations = [];
   const rejected = [];
   const coverFiles = [];
   const allDocsFiles = [];
+  const previousEntries = new Map((previousIndex?.integrations ?? []).map((entry) => [entry.store_slug, entry]));
 
   const sortedRepositories = [...repositories].sort((a, b) => a.storeSlug.localeCompare(b.storeSlug));
 
@@ -216,6 +250,19 @@ export async function buildIndex({
     }
     allDocsFiles.push(...docsFiles);
 
+    // Browse categories, resolved at the index level so the whole catalog is
+    // categorized without waiting for authors to republish: manifest value
+    // (filtered against the vocabulary), else fallback mapping, else
+    // uncategorized — each degradation surfaced as an author-facing warning.
+    // The manifest itself is published verbatim (unknown keys kept): each
+    // Gladys core re-filters against the vocabulary it knows at install time.
+    const { categories, warnings: categoryWarnings } = resolveCategories({
+      manifest,
+      storeSlug: repository.storeSlug,
+      categoryFallback,
+    });
+    categoryWarnings.forEach((categoryWarning) => reject(REJECTION_LEVELS.WARNING, categoryWarning));
+
     integrations.push({
       store_slug: repository.storeSlug,
       repo_url: repository.repoUrl,
@@ -227,6 +274,8 @@ export async function buildIndex({
         pushed_at: repository.pushedAt,
         owner_avatar_url: repository.ownerAvatarUrl,
       },
+      categories,
+      first_seen_at: resolveFirstSeenAt(repository, previousIndex, previousEntries, now),
     });
   }
 

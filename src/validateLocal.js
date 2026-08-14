@@ -1,7 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { DOCS_LANGUAGES, DOCS_MIN_CHARS, REJECTION_LEVELS, docsFilePath } from './constants.js';
+import { splitKnownCategories } from './categories.js';
+import {
+  DOCS_LANGUAGES,
+  DOCS_MIN_CHARS,
+  INTEGRATION_CATALOG_CATEGORIES,
+  REJECTION_LEVELS,
+  docsFilePath,
+} from './constants.js';
 import { validateCover } from './validateCover.js';
 import { validateManifest } from './validateManifest.js';
 
@@ -49,6 +56,32 @@ export async function validateLocalIntegration({ manifestPath, checkDockerImage,
   if (!validation.valid) {
     validation.errors.forEach(error);
     return { problems };
+  }
+
+  // Browse categories (two-stage validation): the schema already rejected a
+  // bad shape above; here the vocabulary stage filters, and the local check
+  // mirrors the indexer's author-facing warnings. The store-side fallback
+  // mapping (keyed by store_slug) only covers integrations published before
+  // the field existed, so a new integration should declare its own.
+  if (manifest.categories === undefined) {
+    warning(
+      'categories: not declared — unless the store fallback mapping lists this integration, it will appear' +
+        ' uncategorized in the catalog (reachable through "All" and search only)',
+    );
+  } else {
+    const { known, unknown } = splitKnownCategories(manifest.categories);
+    if (unknown.length > 0) {
+      warning(
+        `categories: unknown key(s) ${unknown.map((key) => `"${key}"`).join(', ')} would be dropped by the` +
+          ` indexer — the published vocabulary is: ${INTEGRATION_CATALOG_CATEGORIES.join(', ')}`,
+      );
+    }
+    if (known.length === 0) {
+      warning(
+        'categories: no known key left after the vocabulary filter — the integration would appear' +
+          ' uncategorized in the catalog (reachable through "All" and search only)',
+      );
+    }
   }
 
   // Mandatory user documentation (B.9), read from the same checkout as the

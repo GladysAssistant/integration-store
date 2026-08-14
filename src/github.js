@@ -160,6 +160,11 @@ export async function searchRepositoriesByTopic({
         repoUrl: item.html_url,
         defaultBranch: item.default_branch,
         stars: item.stargazers_count,
+        // Repository creation date: the one-time backfill seed of
+        // first_seen_at for entries indexed before the field existed —
+        // never pushed_at, a documentation commit would reshuffle the
+        // catalog's "Newest first" sort.
+        createdAt: item.created_at,
         pushedAt: item.pushed_at,
         ownerAvatarUrl: item.owner.avatar_url,
       })),
