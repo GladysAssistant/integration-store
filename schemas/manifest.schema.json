@@ -14,8 +14,8 @@
     },
     "type": {
       "type": "string",
-      "enum": ["device", "communication", "weather"],
-      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either — the type carries no specific manifest field, the optional capabilities (alerts, sunrise/sunset, UV index, provider images) are simply optional fields of the returned payload."
+      "enum": ["device", "communication", "weather", "movies"],
+      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either — the type carries no specific manifest field, the optional capabilities (alerts, sunrise/sunset, UV index, provider images) are simply optional fields of the returned payload; \"movies\" integrations (movie-data providers, contract B.19) answer the upcoming-releases requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either — the optional `movies_supports_region_and_period` field declares whether the integration interprets the `region`/`daysAhead` request options like a multi-country/period catalog."
     },
     "name": {
       "type": "string",
@@ -78,6 +78,10 @@
     "network_wake": {
       "type": "boolean",
       "description": "Declare true to request permission to send Wake-on-LAN magic packets through the Gladys core host API (POST /network/wake). The request is shown on the install screen as an authorization contract, and an integration that does not declare it gets a 403 (enforced server-side, same pattern as `location`)."
+    },
+    "movies_supports_region_and_period": {
+      "type": "boolean",
+      "description": "\"movies\"-type only (contract B.19). Declare true when the integration actually interprets the `region`/`daysAhead` request options like a TMDB-like catalog spanning several countries/periods, the same way Gladys's own built-in provider does. Default false: a single-cinema \"now playing\" provider has no use for either, and the Gladys dashboard widget hides its period/country fields whenever such a provider is pinned."
     },
     "categories": {
       "type": "array",
@@ -209,6 +213,18 @@
       "else": {
         "not": {
           "required": ["contact_schema"]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["movies_supports_region_and_period"]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "movies"
+          }
         }
       }
     }

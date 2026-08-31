@@ -120,6 +120,38 @@ describe('validateManifest', () => {
     expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
   });
 
+  it('should accept a movies integration', () => {
+    const manifest = buildManifest();
+    manifest.type = 'movies';
+    expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should accept a movies integration declaring or omitting movies_supports_region_and_period', () => {
+    const declared = buildManifest();
+    declared.type = 'movies';
+    declared.movies_supports_region_and_period = true;
+    expect(validateManifest(declared)).to.deep.equal({ valid: true, errors: [] });
+
+    const undeclared = buildManifest();
+    undeclared.type = 'movies';
+    expect(validateManifest(undeclared)).to.deep.equal({ valid: true, errors: [] });
+  });
+
+  it('should reject a non-boolean movies_supports_region_and_period', () => {
+    const manifest = buildManifest();
+    manifest.type = 'movies';
+    manifest.movies_supports_region_and_period = 'yes';
+    const result = validateManifest(manifest);
+    expect(result.valid).to.equal(false);
+    expect(result.errors.join(' ')).to.include('manifest.movies_supports_region_and_period');
+  });
+
+  it('should reject movies_supports_region_and_period on a non-movies integration', () => {
+    const manifest = buildManifest();
+    manifest.movies_supports_region_and_period = true;
+    expect(validateManifest(manifest).valid).to.equal(false);
+  });
+
   it('should reject an unknown type', () => {
     const manifest = buildManifest();
     manifest.type = 'camera';
