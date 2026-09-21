@@ -8,7 +8,7 @@
   },
   "version": "1.0.0",
   "docker_image": "ghcr.io/john/gladys-cinema-releases:1.0.0",
-  "gladys_version": ">=5.0.5",
+  "gladys_version": ">=5.1.0",
   "categories": ["multimedia"],
   "cover_image": "https://raw.githubusercontent.com/john/gladys-cinema-releases/main/cover.jpg",
   "config_schema": [

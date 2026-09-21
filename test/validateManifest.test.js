@@ -20,7 +20,7 @@ const providerManifest = JSON.parse(
 
 /**
  * Deep-clone the reference provider manifest (widgets + scene declarations,
- * gladys_version >= 5.0.5) so each test can mutate it freely.
+ * gladys_version >= 5.1.0) so each test can mutate it freely.
  * @returns {object} A fresh valid provider manifest.
  */
 function buildProviderManifest() {
@@ -1254,7 +1254,7 @@ describe('validateManifest', () => {
       const manifest = buildProviderManifest();
       manifest.gladys_version = '>=5.0.4';
       expect(validateManifest(manifest).errors).to.include(
-        'manifest.gladys_version: type "provider" requires ">=5.0.5" at minimum' +
+        'manifest.gladys_version: type "provider" requires ">=5.1.0" at minimum' +
           ' (older Gladys releases reject manifests carrying an unknown type)',
       );
     });
@@ -1266,7 +1266,7 @@ describe('validateManifest', () => {
       expect(validateManifest(manifest).errors).to.deep.equal(
         ['widgets', 'scene_triggers', 'scene_actions'].map(
           (field) =>
-            `manifest.gladys_version: declaring ${field} requires ">=5.0.5" at minimum` +
+            `manifest.gladys_version: declaring ${field} requires ">=5.1.0" at minimum` +
             ' (older Gladys releases reject manifests carrying unknown fields)',
         ),
       );
@@ -1274,7 +1274,7 @@ describe('validateManifest', () => {
 
     it('should accept the capability fields on a range starting at the first release accepting them', () => {
       const manifest = buildProviderManifest();
-      manifest.gladys_version = '^5.0.5';
+      manifest.gladys_version = '^5.1.0';
       expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
     });
 
@@ -1350,7 +1350,7 @@ describe('validateManifest', () => {
 
     it('should accept widgets on device, communication and weather manifests too', () => {
       const device = buildManifest();
-      device.gladys_version = '>=5.0.5';
+      device.gladys_version = '>=5.1.0';
       device.widgets = buildProviderManifest().widgets;
       expect(validateManifest(device)).to.deep.equal({ valid: true, errors: [] });
 

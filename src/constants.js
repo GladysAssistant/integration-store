@@ -74,15 +74,15 @@ export const MANIFEST_FIELD_MIN_GLADYS_VERSION = {
   categories: '4.86.0',
   // capability fields: dashboard widgets (capabilities/dashboard-widgets.md)
   // and scene triggers / actions (capabilities/scene-triggers-and-actions.md)
-  widgets: '5.0.5',
-  scene_triggers: '5.0.5',
-  scene_actions: '5.0.5',
+  widgets: '5.1.0',
+  scene_triggers: '5.1.0',
+  scene_actions: '5.1.0',
 };
 // Same gate for the `type` values added after the first release: an older
 // core rejects an unknown type with "must be one of device, communication…".
 export const MANIFEST_TYPE_MIN_GLADYS_VERSION = {
   // capabilities/provider-type.md: an integration made only of capabilities
-  provider: '5.0.5',
+  provider: '5.1.0',
 };
 
 // The capability fields (capabilities/provider-type.md): contracts the core
