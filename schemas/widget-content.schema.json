@@ -1,0 +1,1072 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gladysassistant.github.io/integration-store/widget-content.schema.json",
+  "title": "Gladys Assistant integration widget content",
+  "description": "Vocabulary of the content an integration returns for one of its dashboard widgets (the `data.content` of the widget.get command result — capabilities/dashboard-widgets.md, sections 4 to 8). The integration describes WHAT to show, the Gladys core decides HOW: no HTML, no script, no CSS, no free color or size — semantic enums, bounded texts, curated icons, fixed image frames. This schema is the canonical published vocabulary (version 1); the core's normalizer is the enforcement that mirrors it, and the SDK dev mode validates a payload against it before sending. The core never rejects a whole content for one bad component: unknown component types and unknown fields are DROPPED, a component missing a required field is dropped, strings are truncated to their bound with an ellipsis — so a payload this schema refuses still renders partially on a Gladys instance, minus what it refused. Evolutions of the vocabulary are additive only (a new component type, a new optional field, a new enum value), each shipped when the core renders it; the `version` envelope exists for the breaking change this doctrine intends never to make. Two rules live outside this schema, enforced by the core and the SDK dev mode: the CONTENT BUDGET (at most 8 components; at most one focal component among `chart`, `card-list` and `image`; at most 6 tiles among `value` and `gauge`; at most 2 `text` of which one `body`; at most 1 `status`; at most 4 `button`; components beyond a cap are dropped in content order — the first ones win) and the CANONICAL ORDER (whatever the order sent, the card renders header texts, then tiles, then the focal component, then the body text and status list, then the buttons). Widget action keys must be unique within the content, and every `min` must be lower than `max`. Every text is rendered as escaped plain text, every link is https with its domain displayed, every image is a key the integration serves on demand (never a third-party URL), every device reference resolves only inside the integration's own devices.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["components"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1,
+      "description": "Version of the content vocabulary, default 1 when absent. A version higher than the core supports is refused as a whole (WIDGET_CONTENT_VERSION_UNSUPPORTED: the widget says it needs a newer Gladys); 0, a negative or a non-integer value is an invalid payload."
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 3600,
+      "default": 60,
+      "description": "Freshness of the content, chosen by the integration: the core caches it for this long and the frontend refetches on expiry (clamped to 10-3600 by the core, default 60 when absent). Cinema releases: an hour; a vacuum: 30 s. A faster refresh is a nudge (widget.refresh), never a shorter TTL."
+    },
+    "components": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "The components of the card, at most 8 (the content budget). An empty array is a valid state: the core renders the translated empty state, never an error. The card renders them in the canonical order, whatever the order here; within a slot, this order is kept.",
+      "items": {
+        "$ref": "#/definitions/component"
+      }
+    }
+  },
+  "definitions": {
+    "component": {
+      "description": "One component of the card, discriminated by `type`. A component of an unknown type is dropped by the core (forward compatibility), never an error.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/text"
+        },
+        {
+          "$ref": "#/definitions/value"
+        },
+        {
+          "$ref": "#/definitions/gauge"
+        },
+        {
+          "$ref": "#/definitions/status"
+        },
+        {
+          "$ref": "#/definitions/chart"
+        },
+        {
+          "$ref": "#/definitions/cardList"
+        },
+        {
+          "$ref": "#/definitions/image"
+        },
+        {
+          "$ref": "#/definitions/button"
+        }
+      ]
+    },
+    "color": {
+      "type": "string",
+      "enum": ["neutral", "primary", "success", "warning", "danger", "info"],
+      "description": "Semantic color, mapped by the core to the theme colors of both modes — never a hex value. Only ever tints a dot, a badge or a tile accent, never a surface."
+    },
+    "icon": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,40}$",
+      "description": "Feather icon name (the set the dashboard already uses). Shape-validated only: an unknown name renders no icon, never an error."
+    },
+    "imageKey": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+      "description": "Key of an image the integration serves on demand (widget.get-image → raw base64 PNG, JPEG or WebP, ≤ 300 KB decoded, ≤ 4096 px per side) — never a third-party URL loaded by the browser. Integration-scoped, cached one hour by key: when the bytes change, the key changes (a content-addressed suffix such as `cleaning-map-3f9a2c`)."
+    },
+    "deviceFeature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A live device binding: the `external_id` of one of the integration's own device features, exactly as published (`gladys.externalId(...)` in the SDK). Resolved by the core within the integration's tenant — a feature of another integration or of the core drops the component — and completed with its `device_feature_selector` for the frontend's real-time path."
+    },
+    "isoDate": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$",
+      "description": "ISO 8601 date or date-time, sent raw: the core formats it in the user's locale and timezone. An invalid date is dropped."
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https://",
+      "maxLength": 2048,
+      "description": "https URL, at most 2048 characters, without credentials (`user:pass@` is dropped); opened in a new tab with `noopener noreferrer` and the target domain displayed next to the label (unmoderated third-party content: the user sees where they click)."
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "description": "A text: a `heading` or `caption` sets the context (single line, header slot), a `body` explains an empty or degraded state (line breaks honored, rendered before the status list). At most 2 per widget, of which one `body`. A widget is not prose.",
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "variant": {
+          "type": "string",
+          "enum": ["heading", "body", "caption"],
+          "default": "body",
+          "description": "`heading` (≤ 40 characters) and `caption` (≤ 80) are single-line, ellipsis on overflow; `body` (≤ 300) honors line breaks with at most one blank line in a row."
+        },
+        "text": {
+          "description": "The text, bounded by the variant (heading 40, caption 80, body 300 characters per value): plain string or multi-language object (`en` required). Rendered as escaped plain text.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "variant": {
+                "const": "heading"
+              }
+            },
+            "required": ["variant"]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 40
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "variant": {
+                "const": "caption"
+              }
+            },
+            "required": ["variant"]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 80
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "description": "A tile — the visual family of the temperature tile and the chips: one short value, one unit, one label; a sentence cannot fit by construction. At most 6 tiles (`value` + `gauge`) per widget, rendered as one wrapping row. Either an inline `value` (with an optional `unit`), or a live `device_feature` binding in their place (the core then shows the feature's current value and unit, moving the instant the integration publishes a state).",
+      "properties": {
+        "type": {
+          "const": "value"
+        },
+        "value": {
+          "description": "Inline value of the tile. A finite number (formatted by the core in the user's locale), or a text of at most 12 characters per value (plain string or multi-language object with `en`).",
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 12
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 12
+              }
+            }
+          ]
+        },
+        "device_feature": {
+          "$ref": "#/definitions/deviceFeature"
+        },
+        "label": {
+          "description": "Label under the value. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 24 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 24
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24
+              }
+            }
+          ]
+        },
+        "unit": {
+          "description": "Unit next to an inline value. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 6 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 6
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6
+              }
+            }
+          ]
+        },
+        "icon": {
+          "$ref": "#/definitions/icon"
+        },
+        "color": {
+          "$ref": "#/definitions/color"
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["value"],
+          "not": {
+            "required": ["device_feature"]
+          }
+        },
+        {
+          "type": "object",
+          "required": ["device_feature"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["value"]
+              }
+            },
+            {
+              "not": {
+                "required": ["unit"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "gauge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "description": "A tile-sized radial arc — the visual family of the gauge box, drawn in SVG. Counts as a tile in the budget (at most 6 with `value`). Either an inline `value` with its `min`/`max` range (required, finite, min < max), or a live `device_feature` binding (`min`/`max` optional, defaulting to the feature's). `color` is the whole styling: no per-widget thresholds.",
+      "properties": {
+        "type": {
+          "const": "gauge"
+        },
+        "value": {
+          "type": "number",
+          "description": "Inline value, finite."
+        },
+        "min": {
+          "type": "number",
+          "description": "Lower bound of the arc, finite; required with an inline value, must be lower than `max`."
+        },
+        "max": {
+          "type": "number",
+          "description": "Upper bound of the arc, finite; required with an inline value."
+        },
+        "device_feature": {
+          "$ref": "#/definitions/deviceFeature"
+        },
+        "label": {
+          "description": "Label under the arc. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 24 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 24
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24
+              }
+            }
+          ]
+        },
+        "unit": {
+          "description": "Unit next to an inline value. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 6 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 6
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6
+              }
+            }
+          ]
+        },
+        "color": {
+          "$ref": "#/definitions/color"
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["value", "min", "max"],
+          "not": {
+            "required": ["device_feature"]
+          }
+        },
+        {
+          "type": "object",
+          "required": ["device_feature"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["value"]
+              }
+            },
+            {
+              "not": {
+                "required": ["unit"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "items"],
+      "description": "A list of label / value rows with a colored dot — the \"list of states\" (vacuum: state, battery, area cleaned; charging: plan, kWh, cost). At most one per widget, 1-10 rows: ten rows is the height of a card, a longer table is not a dashboard widget. Rendered in the status slot, after the body text.",
+      "properties": {
+        "type": {
+          "const": "status"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "description": "The rows, in order; a row missing its label or value is dropped, the others kept.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "value"],
+            "properties": {
+              "label": {
+                "description": "Row label. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 40 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    }
+                  }
+                ]
+              },
+              "value": {
+                "description": "Row value. A finite number (formatted by the core in the user's locale), or a text of at most 40 characters per value (plain string or multi-language object with `en`).",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    }
+                  }
+                ]
+              },
+              "icon": {
+                "$ref": "#/definitions/icon"
+              },
+              "color": {
+                "$ref": "#/definitions/color"
+              }
+            }
+          }
+        }
+      }
+    },
+    "chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "description": "A chart, the ApexCharts rendering shared with the chart box — series colors from the chart box's palette in order, fixed height, zero styling from the integration. A focal component: at most one of `chart`, `card-list`, `image` per widget. Either inline `series` (data the core has no history of: a production forecast, a charging plan, hourly prices) or live `device_features` with an `interval` (the core plots the features' own history). Optional `annotations` mark the points a curve is read for (a dot at (t, value), or a vertical line at t without a value) and `now_marker` draws a dashed line at the current time when the plotted span contains it.",
+      "properties": {
+        "type": {
+          "const": "chart"
+        },
+        "chart_type": {
+          "type": "string",
+          "enum": ["line", "area", "bar", "stepline"],
+          "default": "line"
+        },
+        "title": {
+          "description": "Title above the chart. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 40 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            }
+          ]
+        },
+        "unit": {
+          "description": "Unit of the plotted values. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 6 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 6
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6
+              }
+            }
+          ]
+        },
+        "series": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "Inline series, 1-4, each with 1-300 points; a series without a valid point is dropped.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["points"],
+            "properties": {
+              "name": {
+                "description": "Name of the series in the legend. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 24 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 24
+                    }
+                  }
+                ]
+              },
+              "points": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 300,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["t", "v"],
+                  "properties": {
+                    "t": {
+                      "$ref": "#/definitions/isoDate"
+                    },
+                    "v": {
+                      "type": "number",
+                      "description": "Value at `t`, finite."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "device_features": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 live device bindings, plotted from the core's own history (aggregated states), the feature's unit converted to the user's preferences.",
+          "items": {
+            "$ref": "#/definitions/deviceFeature"
+          }
+        },
+        "interval": {
+          "type": "string",
+          "enum": [
+            "last-hour",
+            "last-twelve-hours",
+            "last-day",
+            "last-three-days",
+            "last-week",
+            "last-month",
+            "last-three-months",
+            "last-year"
+          ],
+          "default": "last-day",
+          "description": "The chart box's interval enum, for the `device_features` form only; absent or unknown → `last-day`."
+        },
+        "annotations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "description": "Markers the core draws on the chart, at most 8, on either form: with a `value`, a dot on the curve at (t, value); without, a vertical line at `t`; each with its short label in its semantic color. The core never invents an axis range for them — a marker outside the data is simply off the chart.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["t"],
+            "properties": {
+              "t": {
+                "$ref": "#/definitions/isoDate"
+              },
+              "value": {
+                "type": "number",
+                "description": "Value of the dot, finite; absent → a vertical line."
+              },
+              "label": {
+                "description": "Short label of the marker. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 16 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 16
+                    }
+                  }
+                ]
+              },
+              "color": {
+                "$ref": "#/definitions/color"
+              }
+            }
+          }
+        },
+        "now_marker": {
+          "type": "boolean",
+          "default": false,
+          "description": "Draw a dashed line at the current time, labelled by the core in the user's language — only when the plotted series span that instant."
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["series"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["device_features"]
+              }
+            },
+            {
+              "not": {
+                "required": ["interval"]
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["device_features"],
+          "not": {
+            "required": ["series"]
+          }
+        }
+      ]
+    },
+    "cardList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "items"],
+      "description": "A list of cards — the cinema poster grid, a history table, next departures. A focal component (at most one of `chart`, `card-list`, `image` per widget). `grid`: a responsive poster grid (2:3 image frame, title clamped to two lines, date), 1-12 items; `list`: rows (square thumbnail, title, subtitle or date, badge), 1-8 items. Tapping an item with a `description` or `links` opens the core's detail panel. Beyond the cap the integration sorts by relevance and sends the first items: a dashboard shows what matters now, not an archive.",
+      "properties": {
+        "type": {
+          "const": "card-list"
+        },
+        "display": {
+          "type": "string",
+          "enum": ["grid", "list"],
+          "default": "list"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "description": "The cards, in order: at most 12 in `grid`, 8 in `list`; an item without a title is dropped, the others kept.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title"],
+            "properties": {
+              "title": {
+                "description": "Title of the card. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 60 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    }
+                  }
+                ]
+              },
+              "subtitle": {
+                "description": "Subtitle (list rows show it, or the date). Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 60 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 60
+                    }
+                  }
+                ]
+              },
+              "date": {
+                "$ref": "#/definitions/isoDate"
+              },
+              "image": {
+                "$ref": "#/definitions/imageKey"
+              },
+              "badge": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text"],
+                "description": "A short badge on the card.",
+                "properties": {
+                  "text": {
+                    "description": "Badge text. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 16 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16
+                      },
+                      {
+                        "type": "object",
+                        "required": ["en"],
+                        "propertyNames": {
+                          "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16
+                        }
+                      }
+                    ]
+                  },
+                  "color": {
+                    "$ref": "#/definitions/color"
+                  }
+                }
+              },
+              "description": {
+                "description": "Long text of the detail panel, opened on tap. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 2000 characters per value, line breaks honored (at most one blank line in a row). Rendered as escaped plain text: no Markdown, no HTML.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  {
+                    "type": "object",
+                    "required": ["en"],
+                    "propertyNames": {
+                      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    }
+                  }
+                ]
+              },
+              "links": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "description": "Links of the detail panel, at most 3, each with its domain displayed.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["url"],
+                  "properties": {
+                    "url": {
+                      "$ref": "#/definitions/url"
+                    },
+                    "label": {
+                      "description": "Label of the link. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 24 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 24
+                        },
+                        {
+                          "type": "object",
+                          "required": ["en"],
+                          "propertyNames": {
+                            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                          },
+                          "additionalProperties": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 24
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "type": "object",
+        "properties": {
+          "display": {
+            "const": "grid"
+          }
+        },
+        "required": ["display"]
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 8
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "key"],
+      "description": "An image in a fixed 16:9 frame at the card width (the height is the frame's, never the image's), served through the core from the integration (a vigilance map, a solar layout, a robot's cleaning map, a webcam snapshot). A focal component (at most one of `chart`, `card-list`, `image` per widget).",
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "key": {
+          "$ref": "#/definitions/imageKey"
+        },
+        "alt": {
+          "description": "Alternative text of the image. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 100 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            }
+          ]
+        },
+        "fit": {
+          "type": "string",
+          "enum": ["cover", "contain"],
+          "default": "cover",
+          "description": "How the image fills its frame."
+        }
+      }
+    },
+    "button": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "label"],
+      "description": "A pill button in the quick-actions visual family, rendered in the last slot of the card (at most 4 per widget, one wrapping row). Exactly one kind per button: a widget `action` (relayed to the integration over widget.action with the declared `params` — never user input — and acked within the widget's `action_timeout_seconds`; a successful action refreshes the widget), a `device_feature` command (the core sends `value` to the feature through the standard device path, the feature must belong to the integration, be writable and accept the value — active state and live updates for free), or a `link` (opened in a new tab, domain displayed).",
+      "properties": {
+        "type": {
+          "const": "button"
+        },
+        "label": {
+          "description": "Label of the button. Plain string or multi-language object (`en` required, the frontend picks the user's language), at most 24 characters per value, single line. Rendered as escaped plain text: no Markdown, no HTML.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 24
+            },
+            {
+              "type": "object",
+              "required": ["en"],
+              "propertyNames": {
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24
+              }
+            }
+          ]
+        },
+        "icon": {
+          "$ref": "#/definitions/icon"
+        },
+        "style": {
+          "type": "string",
+          "enum": ["primary", "secondary", "danger"],
+          "default": "secondary"
+        },
+        "action": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key"],
+          "description": "Widget action: relayed as declared, allowlisted from this very content by the core.",
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]{2,32}$",
+              "description": "Key of the action, unique within the content (a duplicate key drops the later button)."
+            },
+            "params": {
+              "type": "object",
+              "description": "Opaque parameters echoed to the integration as declared here (never taken from the request), at most 1 KB serialized."
+            },
+            "confirm": {
+              "type": "boolean",
+              "default": false,
+              "description": "Ask the user before sending (`danger` style suggested)."
+            }
+          }
+        },
+        "device_feature": {
+          "$ref": "#/definitions/deviceFeature"
+        },
+        "value": {
+          "type": "number",
+          "description": "Value sent to the `device_feature` on tap (required with it), finite and within the feature's min/max."
+        },
+        "link": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "description": "A link opened in a new tab, its domain displayed.",
+          "properties": {
+            "url": {
+              "$ref": "#/definitions/url"
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["action"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["device_feature"]
+              }
+            },
+            {
+              "not": {
+                "required": ["value"]
+              }
+            },
+            {
+              "not": {
+                "required": ["link"]
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["device_feature", "value"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["action"]
+              }
+            },
+            {
+              "not": {
+                "required": ["link"]
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["link"],
+          "allOf": [
+            {
+              "not": {
+                "required": ["action"]
+              }
+            },
+            {
+              "not": {
+                "required": ["device_feature"]
+              }
+            },
+            {
+              "not": {
+                "required": ["value"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

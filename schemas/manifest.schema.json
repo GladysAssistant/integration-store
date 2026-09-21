@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/manifest.schema.json",
   "title": "Gladys Assistant external integration manifest",
-  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys and webhook keys must be unique, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container port names must be unique across the whole manifest, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments, and every `{{port:<name>}}` placeholder of a `section` text must reference a declared port name (never allowed in `contact_schema`). `categories` is validated in two ordered stages: the shape below rejects like any other malformed field, then the controlled vocabulary filters in code — unknown keys are dropped with a warning, never a rejection — and a manifest declaring `categories` must set a `gladys_version` range whose minimum is at least 4.86.0, the first release whose validator accepts the field (code-enforced by the indexer). The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
+  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys, webhook keys, widget keys, scene trigger keys, scene action keys and the variable/output keys of a scene declaration must be unique in their list, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container port names must be unique across the whole manifest, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments, and every `{{port:<name>}}` placeholder of a `section` text must reference a declared port name (never allowed in `contact_schema`, in widget `settings` nor in scene trigger/action `fields`, the screens rendering them carry no container state). `categories` is validated in two ordered stages: the shape below rejects like any other malformed field, then the controlled vocabulary filters in code — unknown keys are dropped with a warning, never a rejection. Older Gladys releases validate manifests with a strict field allowlist, so a manifest declaring a field or a `type` value they do not know must set a `gladys_version` range whose minimum is at least the first release accepting it (code-enforced by the indexer): 4.86.0 for `categories`, 5.0.5 for `type: \"provider\"`, `widgets`, `scene_triggers` and `scene_actions`. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["manifest_version", "type", "name", "description", "version", "docker_image", "gladys_version"],
@@ -14,8 +14,8 @@
     },
     "type": {
       "type": "string",
-      "enum": ["device", "communication", "weather"],
-      "description": "Integration type. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either — the type carries no specific manifest field, the optional capabilities (alerts, sunrise/sunset, UV index, provider images) are simply optional fields of the returned payload."
+      "enum": ["device", "communication", "weather", "provider"],
+      "description": "Integration type: the primary contract the Gladys core consumes. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either; \"provider\" integrations are made only of capabilities (dashboard widgets, scene triggers and actions): no device surface, a configuration-only page, and at least one capability field (`widgets`, `scene_triggers` or `scene_actions`) is required. Any type may declare capability fields on top of its primary contract; a new contract the core does not consume through a dedicated interface is a capability field, never a type. Declaring `type: \"provider\"` requires gladys_version >= 5.0.5, the first release accepting it (code-enforced by the indexer)."
     },
     "name": {
       "type": "string",
@@ -49,7 +49,7 @@
     "gladys_version": {
       "type": "string",
       "minLength": 1,
-      "description": "Range of compatible Gladys versions, npm semver range syntax (e.g. \">=4.62.0\"). Used by Gladys to filter the catalog."
+      "description": "Range of compatible Gladys versions, npm semver range syntax (e.g. \">=4.62.0\"). Used by Gladys to filter the catalog. Its minimum must also cover every manifest field or `type` value that older releases reject as unknown (code-enforced by the indexer): >= 4.86.0 when `categories` is declared, >= 5.0.5 when `type` is \"provider\" or when `widgets`, `scene_triggers` or `scene_actions` is declared."
     },
     "cover_image": {
       "type": "string",
@@ -147,7 +147,8 @@
                   "enum": ["oauth2", "account_link"]
                 }
               }
-            }
+            },
+            "type": "object"
           }
         ]
       }
@@ -159,6 +160,33 @@
       "description": "Incoming webhooks relayed by Gladys Plus (contract B.17): third parties push events from the Internet to a public per-webhook URL, and Gladys Plus relays them to the integration — shown on the install screen (\"may receive events from the Internet through Gladys Plus\"). The user pastes their Gladys Plus Open API key in the standard \"Gladys Plus webhooks\" block of the Configuration screen; the integration fetches the ready-to-register URLs through the host API.",
       "items": {
         "$ref": "#/definitions/webhook"
+      }
+    },
+    "widgets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "description": "Dashboard widgets declared by the integration (capability field, any type may declare it): the identity of each widget — key, label, icon, per-instance settings — validated at publication time and listed on the install screen and in the dashboard box picker. The content itself is produced at runtime by the integration (widget.get over WebSocket) in the published widget-content vocabulary (widget-content.schema.json, next to this schema), normalized and bounded by the Gladys core before it reaches the dashboard. Declaring the field requires gladys_version >= 5.0.5, the first release accepting it (older cores reject unknown manifest fields — code-enforced by the indexer).",
+      "items": {
+        "$ref": "#/definitions/widget"
+      }
+    },
+    "scene_triggers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "description": "Scene triggers declared for the Gladys scene editor (\"Integrations\" category of the trigger picker; capability field, any type may declare it). The integration fires a declared key through the host API (POST /scene/event) with flat data; the core compares the declared `fields` (filters filled by the scene author, wildcard when empty) with the event and starts the matching scenes, exposing the declared `variables` as {{triggerEvent.data.<key>}}. A published key is never renamed (scenes store it); removing one is a breaking update. Declaring the field requires gladys_version >= 5.0.5, the first release accepting it (code-enforced by the indexer).",
+      "items": {
+        "$ref": "#/definitions/sceneTrigger"
+      }
+    },
+    "scene_actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "description": "Scene actions declared for the Gladys scene editor (\"Integrations\" category of the action picker; capability field, any type may declare it). A scene reaching one relays it to the integration over WebSocket with the resolved `fields` (scene variables substituted in string fields), acked within the declared timeout; the `outputs` of the command result are exposed to the following actions. Same key rules as scene_triggers (triggers and actions are two namespaces); a required field added without a default is a breaking update. Declaring the field requires gladys_version >= 5.0.5, the first release accepting it (code-enforced by the indexer).",
+      "items": {
+        "$ref": "#/definitions/sceneAction"
       }
     }
   },
@@ -199,7 +227,8 @@
               "receive": {
                 "const": false
               }
-            }
+            },
+            "type": "object"
           }
         }
       },
@@ -210,6 +239,32 @@
         "not": {
           "required": ["contact_schema"]
         }
+      }
+    },
+    {
+      "$comment": "a provider integration is made only of capabilities: at least one capability field is required",
+      "if": {
+        "properties": {
+          "type": {
+            "const": "provider"
+          }
+        },
+        "required": ["type"],
+        "type": "object"
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": ["widgets"]
+          },
+          {
+            "required": ["scene_triggers"]
+          },
+          {
+            "required": ["scene_actions"]
+          }
+        ],
+        "type": "object"
       }
     }
   ],
@@ -729,6 +784,267 @@
           "description": "Optional flat form shown before running the action, same format as config_schema entries.",
           "items": {
             "$ref": "#/definitions/configField"
+          }
+        }
+      }
+    },
+    "widgetSettingField": {
+      "description": "A per-instance setting of a widget: the `config_schema` field format, restricted to the types that can live in a dashboard JSON readable by every user of a public dashboard — `secret`, `oauth2` and `account_link` are refused. The `{{port:<name>}}` placeholder is refused in section texts too (the dashboard editor is reachable by non-admins, whose reduced view carries no container state — code-enforced); `{{gladys_host}}` stays allowed. `source: \"devices\"` is the intended way to bind a widget instance to one of the integration's devices.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/configField"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["string", "number", "boolean", "select", "multi_select", "section"]
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "widget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{2,32}$",
+          "description": "Unique key of the widget (code-enforced): the identifier in the dashboard box, the management API and the WebSocket messages."
+        },
+        "label": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 30
+          },
+          "description": "Name of the widget in the box picker and default card title: multi-language (`en` required), 3-30 characters per language.",
+          "type": "object"
+        },
+        "description": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "description": "Shown under the picker tile and on the install screen: multi-language (`en` required), at most 100 characters per language.",
+          "type": "object"
+        },
+        "icon": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,40}$",
+          "description": "Feather icon name (the set the box picker already uses). Only the shape is validated: an unknown name renders the generic widget icon, never an error — a cosmetic field never rejects a manifest."
+        },
+        "settings": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Per-instance settings of the widget, rendered and validated by the `config_schema` engine (keys unique within the widget, code-enforced), restricted to non-sensitive types.",
+          "items": {
+            "$ref": "#/definitions/widgetSettingField"
+          }
+        },
+        "action_timeout_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 120,
+          "default": 30,
+          "description": "Ack delay granted to widget.action (the button component of the content): the same exception to the 5s command rule as the manifest `actions`."
+        }
+      }
+    },
+    "sceneVariable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Unique key (code-enforced) of the variable (trigger) or output (action) within its list."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "boolean"],
+          "description": "Scalars only: an identifier, a count, a short text — never an image or a file (a picture goes through POST /camera/image on a camera device)."
+        },
+        "label": {
+          "$ref": "#/definitions/multiLanguageText"
+        },
+        "description": {
+          "$ref": "#/definitions/multiLanguageText"
+        }
+      }
+    },
+    "sceneSectionText": {
+      "description": "A `section` text of a scene trigger / action: same rules as any section text, plus the `{{port:<name>}}` placeholder is refused in every language (code-enforced) — the scene editor never loads the container detail that resolves it, the same reason the `contact_schema` refuses it. `{{gladys_host}}` stays allowed.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/sectionText"
+        }
+      ]
+    },
+    "sceneTriggerField": {
+      "description": "A trigger filter, filled by the scene author and compared with the event value of the same key: the `config_schema` field format with a restricted type list — no `secret` (a scene JSON is readable by every user), no `oauth2` / `account_link` (linking an account is integration-scoped), no `boolean` (a toggle has no empty state, so it could never express \"any\"; a select with the two values gives the three states).",
+      "allOf": [
+        {
+          "$ref": "#/definitions/configField"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["string", "number", "select", "multi_select", "section"]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "section"
+              }
+            },
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "label": {
+                "$ref": "#/definitions/sceneSectionText"
+              },
+              "description": {
+                "$ref": "#/definitions/sceneSectionText"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "sceneActionField": {
+      "description": "An action parameter, filled by the scene author: the `config_schema` field format with a restricted type list — no `secret`, no `oauth2` / `account_link`. `string` fields accept scene variables ({{...}}), resolved by the core before the action is relayed.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/configField"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["string", "number", "boolean", "select", "multi_select", "section"]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "section"
+              }
+            },
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "label": {
+                "$ref": "#/definitions/sceneSectionText"
+              },
+              "description": {
+                "$ref": "#/definitions/sceneSectionText"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "sceneTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "maxLength": 40,
+          "description": "Unique key of the trigger among the triggers of the manifest (code-enforced): the identifier the integration fires and the one stored by the scenes. Never renamed once published."
+        },
+        "label": {
+          "$ref": "#/definitions/multiLanguageText",
+          "description": "Entry of the trigger picker (multi-language, `en` required)."
+        },
+        "description": {
+          "$ref": "#/definitions/multiLanguageText",
+          "description": "The picker's subtitle (multi-language, optional)."
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Filters the scene author fills in (keys unique within the trigger, code-enforced), each compared with the event value of the same key: equality, or membership for a `multi_select` (\"match any of these\"). An empty field is a wildcard; `required: true` denies the wildcard in the editor.",
+          "items": {
+            "$ref": "#/definitions/sceneTriggerField"
+          }
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 20,
+          "description": "The only data the event exposes to the scene actions ({{triggerEvent.data.<key>}}): a whitelist, every other event key is dropped. A key may be declared in both `fields` and `variables`. Keys unique within the list (code-enforced).",
+          "items": {
+            "$ref": "#/definitions/sceneVariable"
+          }
+        }
+      }
+    },
+    "sceneAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "maxLength": 40,
+          "description": "Unique key of the action among the actions of the manifest (code-enforced), stored by the scenes. Never renamed once published."
+        },
+        "label": {
+          "$ref": "#/definitions/multiLanguageText",
+          "description": "Entry of the action picker (multi-language, `en` required)."
+        },
+        "description": {
+          "$ref": "#/definitions/multiLanguageText",
+          "description": "The picker's subtitle (multi-language, optional)."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 120,
+          "default": 30,
+          "description": "Ack delay granted to the action, connection wait included (the manifest actions exception to the 5s command rule: a snapshot or a cloud call can be long)."
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Parameters of the action, filled by the scene author (keys unique within the action, code-enforced). Adding a `required` field without a `default` to a published action is a breaking change for every scene using it.",
+          "items": {
+            "$ref": "#/definitions/sceneActionField"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "maxItems": 20,
+          "description": "Values the action returns to the scene in the command result `data.outputs`, exposed to the following actions as {{<column>.<row>.<key>}}: a whitelist, every other key is dropped. Keys unique within the list (code-enforced).",
+          "items": {
+            "$ref": "#/definitions/sceneVariable"
           }
         }
       }

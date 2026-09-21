@@ -1,0 +1,135 @@
+{
+  "manifest_version": 1,
+  "type": "provider",
+  "name": "Cinema Releases",
+  "description": {
+    "en": "Upcoming movie releases on your dashboard, with scene triggers.",
+    "fr": "Les prochaines sorties cinéma sur votre dashboard, avec des déclencheurs de scène."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/john/gladys-cinema-releases:1.0.0",
+  "gladys_version": ">=5.0.5",
+  "categories": ["multimedia"],
+  "cover_image": "https://raw.githubusercontent.com/john/gladys-cinema-releases/main/cover.jpg",
+  "config_schema": [
+    {
+      "key": "api_key",
+      "type": "secret",
+      "label": { "en": "TMDB API key", "fr": "Clé d'API TMDB" },
+      "required": true
+    }
+  ],
+  "widgets": [
+    {
+      "key": "upcoming_releases",
+      "label": { "en": "Upcoming releases", "fr": "Prochaines sorties" },
+      "description": {
+        "en": "Movies coming to theaters in your region.",
+        "fr": "Les films bientôt en salle dans votre région."
+      },
+      "icon": "film",
+      "settings": [
+        {
+          "key": "intro",
+          "type": "section",
+          "label": { "en": "Region", "fr": "Région" },
+          "description": {
+            "en": "Pick the country whose release dates you want; Gladys is reached at {{gladys_host}}.",
+            "fr": "Choisissez le pays dont vous voulez les dates de sortie ; Gladys est joignable sur {{gladys_host}}."
+          }
+        },
+        {
+          "key": "period_days",
+          "type": "select",
+          "label": { "en": "Period", "fr": "Période" },
+          "default": "30",
+          "options": [
+            { "value": "15", "label": { "en": "15 days", "fr": "15 jours" } },
+            { "value": "30", "label": { "en": "1 month", "fr": "1 mois" } },
+            { "value": "60", "label": { "en": "2 months", "fr": "2 mois" } }
+          ]
+        },
+        {
+          "key": "region",
+          "type": "string",
+          "label": { "en": "Country code", "fr": "Code pays" },
+          "placeholder": { "en": "FR" }
+        },
+        {
+          "key": "notify",
+          "type": "boolean",
+          "label": { "en": "Highlight new releases", "fr": "Mettre en avant les nouveautés" },
+          "default": true
+        }
+      ],
+      "action_timeout_seconds": 30
+    },
+    {
+      "key": "theater_status",
+      "label": { "en": "Theater status", "fr": "État du cinéma" },
+      "settings": [
+        {
+          "key": "theater",
+          "type": "select",
+          "source": "devices",
+          "label": { "en": "Theater", "fr": "Cinéma" },
+          "required": true
+        }
+      ]
+    }
+  ],
+  "scene_triggers": [
+    {
+      "key": "new_release",
+      "label": { "en": "New release announced", "fr": "Nouvelle sortie annoncée" },
+      "description": { "en": "A movie was added to the upcoming releases." },
+      "fields": [
+        {
+          "key": "intro",
+          "type": "section",
+          "label": { "en": "Filters", "fr": "Filtres" },
+          "description": { "en": "Leave a filter empty to match any value." }
+        },
+        {
+          "key": "genre",
+          "type": "multi_select",
+          "label": { "en": "Genres", "fr": "Genres" },
+          "options": [
+            { "value": "action", "label": { "en": "Action", "fr": "Action" } },
+            { "value": "comedy", "label": { "en": "Comedy", "fr": "Comédie" } }
+          ]
+        },
+        {
+          "key": "region",
+          "type": "string",
+          "label": { "en": "Region", "fr": "Région" },
+          "placeholder": { "en": "FR" }
+        },
+        { "key": "min_score", "type": "number", "label": { "en": "Minimum score" }, "min": 0, "max": 10 }
+      ],
+      "variables": [
+        { "key": "title", "type": "string", "label": { "en": "Title", "fr": "Titre" } },
+        { "key": "score", "type": "number", "label": { "en": "Score" }, "description": { "en": "TMDB score, 0-10." } },
+        { "key": "is_premiere", "type": "boolean", "label": { "en": "Premiere" } }
+      ]
+    },
+    { "key": "echo", "label": { "en": "Echo event" } }
+  ],
+  "scene_actions": [
+    {
+      "key": "refresh_releases",
+      "label": { "en": "Refresh the releases", "fr": "Rafraîchir les sorties" },
+      "description": { "en": "Fetches the latest releases from TMDB." },
+      "timeout_seconds": 20,
+      "fields": [
+        { "key": "region", "type": "string", "label": { "en": "Region" }, "default": "FR" },
+        { "key": "force", "type": "boolean", "label": { "en": "Ignore the cache" }, "default": false }
+      ],
+      "outputs": [
+        { "key": "count", "type": "number", "label": { "en": "Number of releases" } },
+        { "key": "first_title", "type": "string", "label": { "en": "First title" } }
+      ]
+    },
+    { "key": "echo", "label": { "en": "Echo" } }
+  ]
+}

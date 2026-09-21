@@ -14,6 +14,19 @@ function buildManifest() {
   return structuredClone(validManifest);
 }
 
+const providerManifest = JSON.parse(
+  readFileSync(new URL('./fixtures/provider-manifest.json', import.meta.url), 'utf8'),
+);
+
+/**
+ * Deep-clone the reference provider manifest (widgets + scene declarations,
+ * gladys_version >= 5.0.5) so each test can mutate it freely.
+ * @returns {object} A fresh valid provider manifest.
+ */
+function buildProviderManifest() {
+  return structuredClone(providerManifest);
+}
+
 describe('manifestSchema', () => {
   it('should expose the canonical schema with its public $id', () => {
     expect(manifestSchema.$id).to.equal('https://gladysassistant.github.io/integration-store/manifest.schema.json');
@@ -1233,6 +1246,502 @@ describe('validateManifest', () => {
       const manifest = buildManifest();
       manifest.actions[0].icon = 'bolt';
       expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('gladys_version compatibility gates', () => {
+    it('should reject type "provider" on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildProviderManifest();
+      manifest.gladys_version = '>=5.0.4';
+      expect(validateManifest(manifest).errors).to.include(
+        'manifest.gladys_version: type "provider" requires ">=5.0.5" at minimum' +
+          ' (older Gladys releases reject manifests carrying an unknown type)',
+      );
+    });
+
+    it('should reject each capability field on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildProviderManifest();
+      manifest.type = 'device';
+      manifest.gladys_version = '>=4.86.0';
+      expect(validateManifest(manifest).errors).to.deep.equal(
+        ['widgets', 'scene_triggers', 'scene_actions'].map(
+          (field) =>
+            `manifest.gladys_version: declaring ${field} requires ">=5.0.5" at minimum` +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+        ),
+      );
+    });
+
+    it('should accept the capability fields on a range starting at the first release accepting them', () => {
+      const manifest = buildProviderManifest();
+      manifest.gladys_version = '^5.0.5';
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a device manifest on an old range when it declares no gated field', () => {
+      const manifest = buildManifest();
+      delete manifest.categories;
+      manifest.gladys_version = '>=4.62.0';
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+  });
+
+  describe('provider type', () => {
+    it('should accept the reference provider manifest (widgets + scene declarations)', () => {
+      expect(validateManifest(buildProviderManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a provider declaring a single capability field', () => {
+      ['widgets', 'scene_triggers', 'scene_actions'].forEach((field) => {
+        const manifest = buildProviderManifest();
+        ['widgets', 'scene_triggers', 'scene_actions']
+          .filter((other) => other !== field)
+          .forEach((other) => delete manifest[other]);
+        expect(validateManifest(manifest), field).to.deep.equal({ valid: true, errors: [] });
+      });
+    });
+
+    it('should reject a provider declaring no capability field, with the explicit rule', () => {
+      const manifest = buildProviderManifest();
+      delete manifest.widgets;
+      delete manifest.scene_triggers;
+      delete manifest.scene_actions;
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.type: a provider integration must declare at least one capability field' +
+            ' (widgets, scene_triggers, scene_actions)',
+        ],
+      });
+    });
+
+    it('should keep the other schema errors next to the provider rule', () => {
+      const manifest = buildProviderManifest();
+      delete manifest.widgets;
+      delete manifest.scene_triggers;
+      delete manifest.scene_actions;
+      manifest.name = 'ab';
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.name: must NOT have fewer than 3 characters',
+        'manifest.type: a provider integration must declare at least one capability field' +
+          ' (widgets, scene_triggers, scene_actions)',
+      ]);
+    });
+
+    it('should reject messaging and contact_schema on a provider integration', () => {
+      const manifest = buildProviderManifest();
+      manifest.messaging = { receive: false };
+      manifest.contact_schema = [{ key: 'phone', type: 'string', label: { en: 'Phone' } }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('widgets', () => {
+    /**
+     * Provider manifest whose first widget is replaced.
+     * @param {object} widget - Widget declaration.
+     * @returns {object} Manifest.
+     */
+    function withWidget(widget) {
+      const manifest = buildProviderManifest();
+      manifest.widgets = [widget];
+      return manifest;
+    }
+
+    it('should accept widgets on device, communication and weather manifests too', () => {
+      const device = buildManifest();
+      device.gladys_version = '>=5.0.5';
+      device.widgets = buildProviderManifest().widgets;
+      expect(validateManifest(device)).to.deep.equal({ valid: true, errors: [] });
+
+      const weather = { ...device, type: 'weather' };
+      expect(validateManifest(weather)).to.deep.equal({ valid: true, errors: [] });
+
+      const communication = { ...device, type: 'communication', messaging: { receive: true } };
+      expect(validateManifest(communication)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a minimal widget (key and label only)', () => {
+      expect(validateManifest(withWidget({ key: 'battery', label: { en: 'Battery' } }))).to.deep.equal({
+        valid: true,
+        errors: [],
+      });
+    });
+
+    it('should reject an empty widgets list', () => {
+      const manifest = buildProviderManifest();
+      manifest.widgets = [];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject more than 5 widgets', () => {
+      const manifest = buildProviderManifest();
+      manifest.widgets = Array.from({ length: 6 }, (unused, i) => ({
+        key: `widget_${i}`,
+        label: { en: `Widget ${i}` },
+      }));
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an invalid widget key', () => {
+      ['A', 'a', 'x'.repeat(33), 'with-dash'].forEach((key) => {
+        expect(validateManifest(withWidget({ key, label: { en: 'Widget' } })).valid, key).to.equal(false);
+      });
+    });
+
+    it('should reject duplicate widget keys', () => {
+      const manifest = buildProviderManifest();
+      manifest.widgets[1].key = 'upcoming_releases';
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.widgets.1.key: duplicate key "upcoming_releases"',
+      ]);
+    });
+
+    it('should enforce the 3-30 characters bounds on each label value', () => {
+      expect(validateManifest(withWidget({ key: 'w1', label: { en: 'Up' } })).errors).to.deep.equal([
+        'manifest.widgets.0.label.en: must NOT have fewer than 3 characters',
+      ]);
+      expect(validateManifest(withWidget({ key: 'w1', label: { en: 'Widget', fr: 'x'.repeat(31) } })).valid).to.equal(
+        false,
+      );
+    });
+
+    it('should require an english label', () => {
+      expect(validateManifest(withWidget({ key: 'w1', label: { fr: 'Batterie' } })).valid).to.equal(false);
+    });
+
+    it('should enforce the 100 characters bound on each description value', () => {
+      const manifest = withWidget({ key: 'w1', label: { en: 'Widget' }, description: { en: 'x'.repeat(101) } });
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should validate the icon shape but never the icon name', () => {
+      expect(validateManifest(withWidget({ key: 'w1', label: { en: 'Widget' }, icon: 'Film Reel' })).valid).to.equal(
+        false,
+      );
+      expect(
+        validateManifest(withWidget({ key: 'w1', label: { en: 'Widget' }, icon: 'not-a-feather-icon' })),
+      ).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an unknown widget field', () => {
+      expect(validateManifest(withWidget({ key: 'w1', label: { en: 'Widget' }, color: 'red' })).valid).to.equal(false);
+    });
+
+    it('should reject more than 10 settings', () => {
+      const settings = Array.from({ length: 11 }, (unused, i) => ({
+        key: `setting_${i}`,
+        type: 'string',
+        label: { en: 'Setting' },
+      }));
+      expect(validateManifest(withWidget({ key: 'w1', label: { en: 'Widget' }, settings })).valid).to.equal(false);
+    });
+
+    it('should reject sensitive setting types (secret, oauth2, account_link)', () => {
+      ['secret', 'oauth2', 'account_link'].forEach((type) => {
+        const manifest = withWidget({
+          key: 'w1',
+          label: { en: 'Widget' },
+          settings: [{ key: 'token', type, label: { en: 'Token' } }],
+        });
+        expect(validateManifest(manifest).errors, type).to.deep.equal([
+          'manifest.widgets.0.settings.0.type: must be equal to one of the allowed values',
+        ]);
+      });
+    });
+
+    it('should apply the config field rules to the settings', () => {
+      const manifest = withWidget({
+        key: 'w1',
+        label: { en: 'Widget' },
+        settings: [
+          { key: 'a', type: 'string', label: { en: 'A' } },
+          { key: 'a', type: 'number', label: { en: 'A again' }, default: 'nope' },
+        ],
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.widgets.0.settings.1.key: duplicate key "a"',
+        'manifest.widgets.0.settings.1.default: must be a number',
+      ]);
+    });
+
+    it('should reject a {{port:<name>}} placeholder in a settings section, declared or not, but allow {{gladys_host}}', () => {
+      const manifest = withWidget({
+        key: 'w1',
+        label: { en: 'Widget' },
+        settings: [
+          {
+            key: 'intro',
+            type: 'section',
+            label: { en: 'Reach the UI on {{port:frigate_ui}}' },
+            description: { en: 'http://{{gladys_host}}:{{port:frigate_ui}}', fr: 'Sur {{port:other}}' },
+          },
+        ],
+      });
+      manifest.containers = [
+        {
+          name: 'frigate',
+          docker_image: 'ghcr.io/blakeblackshear/frigate:0.14.1',
+          ports: [{ container_port: 5000, name: 'frigate_ui', label: { en: 'UI' } }],
+        },
+      ];
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.widgets.0.settings.0.label.en: {{port:frigate_ui}} is not available in widget settings',
+        'manifest.widgets.0.settings.0.description.en: {{port:frigate_ui}} is not available in widget settings',
+        'manifest.widgets.0.settings.0.description.fr: {{port:other}} is not available in widget settings',
+      ]);
+
+      const hostOnly = withWidget({
+        key: 'w1',
+        label: { en: 'Widget' },
+        settings: [{ key: 'intro', type: 'section', label: { en: 'Open http://{{gladys_host}}' } }],
+      });
+      expect(validateManifest(hostOnly)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject an action_timeout_seconds outside the 5-120 seconds bounds', () => {
+      [4, 121, '30'].forEach((timeout) => {
+        const manifest = withWidget({ key: 'w1', label: { en: 'Widget' }, action_timeout_seconds: timeout });
+        expect(validateManifest(manifest).valid, String(timeout)).to.equal(false);
+      });
+    });
+  });
+
+  describe('scene_triggers and scene_actions', () => {
+    ['scene_triggers', 'scene_actions'].forEach((listName) => {
+      /**
+       * Provider manifest whose list is replaced.
+       * @param {object[]} declarations - Scene declarations.
+       * @returns {object} Manifest.
+       */
+      function withDeclarations(declarations) {
+        const manifest = buildProviderManifest();
+        manifest[listName] = declarations;
+        return manifest;
+      }
+
+      describe(listName, () => {
+        it('should accept a minimal declaration (key and label only)', () => {
+          expect(validateManifest(withDeclarations([{ key: 'a', label: { en: 'A' } }]))).to.deep.equal({
+            valid: true,
+            errors: [],
+          });
+        });
+
+        it('should reject an empty list', () => {
+          expect(validateManifest(withDeclarations([])).valid).to.equal(false);
+        });
+
+        it('should reject more than 20 entries', () => {
+          const declarations = Array.from({ length: 21 }, (unused, i) => ({ key: `k${i}`, label: { en: 'A' } }));
+          expect(validateManifest(withDeclarations(declarations)).valid).to.equal(false);
+        });
+
+        it('should reject an invalid or too long key', () => {
+          expect(validateManifest(withDeclarations([{ key: 'Bad Key', label: { en: 'A' } }])).valid).to.equal(false);
+          expect(validateManifest(withDeclarations([{ key: 'a'.repeat(41), label: { en: 'A' } }])).valid).to.equal(
+            false,
+          );
+          expect(validateManifest(withDeclarations([{ key: 'a'.repeat(40), label: { en: 'A' } }]))).to.deep.equal({
+            valid: true,
+            errors: [],
+          });
+        });
+
+        it('should reject duplicate keys within the list', () => {
+          const manifest = withDeclarations([
+            { key: 'a', label: { en: 'A' } },
+            { key: 'a', label: { en: 'A again' } },
+          ]);
+          expect(validateManifest(manifest).errors).to.deep.equal([`manifest.${listName}.1.key: duplicate key "a"`]);
+        });
+
+        it('should reject a label without english value and a non-object description', () => {
+          expect(validateManifest(withDeclarations([{ key: 'a', label: { fr: 'A' } }])).valid).to.equal(false);
+          expect(
+            validateManifest(withDeclarations([{ key: 'a', label: { en: 'A' }, description: 'plain' }])).valid,
+          ).to.equal(false);
+        });
+
+        it('should reject an unknown field', () => {
+          expect(validateManifest(withDeclarations([{ key: 'a', label: { en: 'A' }, icon: 'x' }])).valid).to.equal(
+            false,
+          );
+        });
+
+        it('should reject more than 10 fields', () => {
+          const fields = Array.from({ length: 11 }, (unused, i) => ({
+            key: `f${i}`,
+            type: 'string',
+            label: { en: 'F' },
+          }));
+          expect(validateManifest(withDeclarations([{ key: 'a', label: { en: 'A' }, fields }])).valid).to.equal(false);
+        });
+
+        it('should reject secret, oauth2 and account_link fields', () => {
+          ['secret', 'oauth2', 'account_link'].forEach((type) => {
+            const manifest = withDeclarations([
+              { key: 'a', label: { en: 'A' }, fields: [{ key: 'x', type, label: { en: 'X' } }] },
+            ]);
+            expect(validateManifest(manifest).errors, type).to.deep.equal([
+              `manifest.${listName}.0.fields.0.type: must be equal to one of the allowed values`,
+            ]);
+          });
+        });
+
+        it('should apply the config field rules to the fields', () => {
+          const manifest = withDeclarations([
+            {
+              key: 'a',
+              label: { en: 'A' },
+              fields: [
+                { key: 'x', type: 'string', label: { en: 'X' } },
+                { key: 'x', type: 'number', label: { en: 'X again' }, min: 5, max: 1 },
+              ],
+            },
+          ]);
+          expect(validateManifest(manifest).errors).to.deep.equal([
+            `manifest.${listName}.0.fields.1.key: duplicate key "x"`,
+            `manifest.${listName}.0.fields.1.min: must be lower than or equal to max`,
+          ]);
+        });
+
+        it('should reject a {{port:<name>}} placeholder in a fields section, declared or not, but allow {{gladys_host}}', () => {
+          const manifest = withDeclarations([
+            {
+              key: 'a',
+              label: { en: 'A' },
+              fields: [{ key: 'intro', type: 'section', label: { en: 'See {{port:web}} on {{gladys_host}}' } }],
+            },
+          ]);
+          manifest.containers = [
+            {
+              name: 'ui',
+              docker_image: 'nginx:1.27',
+              ports: [{ container_port: 80, name: 'web', label: { en: 'Web' } }],
+            },
+          ];
+          expect(validateManifest(manifest).errors).to.deep.equal([
+            `manifest.${listName}.0.fields.0.label.en: {{port:web}} is not available in the scene editor`,
+          ]);
+
+          const hostOnly = withDeclarations([
+            {
+              key: 'a',
+              label: { en: 'A' },
+              fields: [{ key: 'intro', type: 'section', label: { en: 'Host: {{gladys_host}}' } }],
+            },
+          ]);
+          expect(validateManifest(hostOnly)).to.deep.equal({ valid: true, errors: [] });
+        });
+
+        it('should allow the same field key in two different declarations', () => {
+          const manifest = withDeclarations([
+            { key: 'a', label: { en: 'A' }, fields: [{ key: 'x', type: 'string', label: { en: 'X' } }] },
+            { key: 'b', label: { en: 'B' }, fields: [{ key: 'x', type: 'string', label: { en: 'X' } }] },
+          ]);
+          expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+        });
+      });
+    });
+
+    it('should allow the same key in the triggers and in the actions (two namespaces)', () => {
+      const manifest = buildProviderManifest();
+      expect(manifest.scene_triggers.map((entry) => entry.key)).to.include('echo');
+      expect(manifest.scene_actions.map((entry) => entry.key)).to.include('echo');
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a boolean trigger filter but accept a boolean action parameter', () => {
+      const field = { key: 'flag', type: 'boolean', label: { en: 'Flag' } };
+      const trigger = buildProviderManifest();
+      trigger.scene_triggers = [{ key: 'a', label: { en: 'A' }, fields: [field] }];
+      expect(validateManifest(trigger).errors).to.deep.equal([
+        'manifest.scene_triggers.0.fields.0.type: must be equal to one of the allowed values',
+      ]);
+      const action = buildProviderManifest();
+      action.scene_actions = [{ key: 'a', label: { en: 'A' }, fields: [field] }];
+      expect(validateManifest(action)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject timeout_seconds and outputs on a trigger, variables on an action', () => {
+      const trigger = buildProviderManifest();
+      trigger.scene_triggers = [{ key: 'a', label: { en: 'A' }, timeout_seconds: 10 }];
+      expect(validateManifest(trigger).valid).to.equal(false);
+      trigger.scene_triggers = [{ key: 'a', label: { en: 'A' }, outputs: [] }];
+      expect(validateManifest(trigger).valid).to.equal(false);
+      const action = buildProviderManifest();
+      action.scene_actions = [{ key: 'a', label: { en: 'A' }, variables: [] }];
+      expect(validateManifest(action).valid).to.equal(false);
+    });
+
+    it('should reject an action timeout outside the 5-120 seconds bounds', () => {
+      [4, 121, '30'].forEach((timeout) => {
+        const manifest = buildProviderManifest();
+        manifest.scene_actions = [{ key: 'a', label: { en: 'A' }, timeout_seconds: timeout }];
+        expect(validateManifest(manifest).valid, String(timeout)).to.equal(false);
+      });
+    });
+
+    [
+      ['scene_triggers', 'variables'],
+      ['scene_actions', 'outputs'],
+    ].forEach(([listName, variablesName]) => {
+      describe(`${listName}[].${variablesName}`, () => {
+        /**
+         * Provider manifest whose first declaration carries the given whitelist.
+         * @param {object[]} variables - Variables or outputs.
+         * @returns {object} Manifest.
+         */
+        function withVariables(variables) {
+          const manifest = buildProviderManifest();
+          manifest[listName] = [{ key: 'a', label: { en: 'A' }, [variablesName]: variables }];
+          return manifest;
+        }
+
+        it('should accept the three scalar types', () => {
+          const manifest = withVariables([
+            { key: 's', type: 'string', label: { en: 'S' } },
+            { key: 'n', type: 'number', label: { en: 'N' }, description: { en: 'A number' } },
+            { key: 'b', type: 'boolean', label: { en: 'B' } },
+          ]);
+          expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+        });
+
+        it('should reject more than 20 entries', () => {
+          const variables = Array.from({ length: 21 }, (unused, i) => ({
+            key: `v${i}`,
+            type: 'string',
+            label: { en: 'V' },
+          }));
+          expect(validateManifest(withVariables(variables)).valid).to.equal(false);
+        });
+
+        it('should reject a non-scalar type, a missing label and an invalid key', () => {
+          expect(validateManifest(withVariables([{ key: 'v', type: 'image', label: { en: 'V' } }])).valid).to.equal(
+            false,
+          );
+          expect(validateManifest(withVariables([{ key: 'v', type: 'string' }])).valid).to.equal(false);
+          expect(validateManifest(withVariables([{ key: 'Bad', type: 'string', label: { en: 'V' } }])).valid).to.equal(
+            false,
+          );
+        });
+
+        it('should reject an unknown field', () => {
+          const manifest = withVariables([{ key: 'v', type: 'string', label: { en: 'V' }, default: 'x' }]);
+          expect(validateManifest(manifest).valid).to.equal(false);
+        });
+
+        it('should reject duplicate keys within the list', () => {
+          const manifest = withVariables([
+            { key: 'v', type: 'string', label: { en: 'V' } },
+            { key: 'v', type: 'number', label: { en: 'V again' } },
+          ]);
+          expect(validateManifest(manifest).errors).to.deep.equal([
+            `manifest.${listName}.0.${variablesName}.1.key: duplicate key "v"`,
+          ]);
+        });
+      });
     });
   });
 });

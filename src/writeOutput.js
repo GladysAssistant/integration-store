@@ -6,6 +6,7 @@ import { PLACEHOLDER_COVER_FILE_NAME } from './constants.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const CANONICAL_SCHEMA_PATH = path.join(packageRoot, 'schemas', 'manifest.schema.json');
+const WIDGET_CONTENT_SCHEMA_PATH = path.join(packageRoot, 'schemas', 'widget-content.schema.json');
 const PLACEHOLDER_COVER_PATH = path.join(packageRoot, 'assets', 'placeholder-cover.png');
 
 /**
@@ -19,8 +20,9 @@ function toJson(value) {
 
 /**
  * Write everything the store publishes: index.json, rejected.json, the
- * canonical manifest.schema.json, the re-hosted covers (and the placeholder)
- * and the re-hosted documentation files.
+ * canonical manifest.schema.json and widget-content.schema.json (the two
+ * schemas this repository owns for the whole ecosystem), the re-hosted
+ * covers (and the placeholder) and the re-hosted documentation files.
  * @param {object} options - Options.
  * @param {string} options.outputDir - Destination directory.
  * @param {object} options.index - index.json content.
@@ -36,6 +38,7 @@ export async function writeOutput({ outputDir, index, rejected, coverFiles, docs
   await writeFile(path.join(outputDir, 'index.json'), toJson(index));
   await writeFile(path.join(outputDir, 'rejected.json'), toJson(rejected));
   await copyFile(CANONICAL_SCHEMA_PATH, path.join(outputDir, 'manifest.schema.json'));
+  await copyFile(WIDGET_CONTENT_SCHEMA_PATH, path.join(outputDir, 'widget-content.schema.json'));
   await copyFile(PLACEHOLDER_COVER_PATH, path.join(coversDir, PLACEHOLDER_COVER_FILE_NAME));
 
   for (const coverFile of coverFiles) {

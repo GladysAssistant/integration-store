@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import semver from 'semver';
 
-import { CATEGORIES_MIN_GLADYS_VERSION, SUPPORTED_MANIFEST_VERSION } from './constants.js';
+import {
+  CAPABILITY_MANIFEST_FIELDS,
+  MANIFEST_FIELD_MIN_GLADYS_VERSION,
+  MANIFEST_TYPE_MIN_GLADYS_VERSION,
+  SUPPORTED_MANIFEST_VERSION,
+} from './constants.js';
 import { isValidDockerImageReference } from './parseDockerImageReference.js';
 
 const schemaPath = fileURLToPath(new URL('../schemas/manifest.schema.json', import.meta.url));
@@ -18,6 +23,14 @@ const validateAgainstSchema = ajv.compile(manifestSchema);
 // Strict syntax, no space inside the braces.
 const PORT_PLACEHOLDER_REGEX = /\{\{port:([a-z0-9_]+)\}\}/g;
 
+// Scene declarations share one shape (key, label, description, fields) and
+// differ by the name of their whitelist list: `variables` an event exposes to
+// the scene, `outputs` an action returns to it.
+const SCENE_DECLARATION_LISTS = {
+  scene_triggers: 'variables',
+  scene_actions: 'outputs',
+};
+
 /**
  * Format an AJV error as a spec-style reason, e.g. "manifest.name: must NOT have more than 30 characters".
  * @param {object} ajvError - Error object produced by AJV.
@@ -26,6 +39,30 @@ const PORT_PLACEHOLDER_REGEX = /\{\{port:([a-z0-9_]+)\}\}/g;
 function formatAjvError(ajvError) {
   const path = ajvError.instancePath.replaceAll('/', '.');
   return `manifest${path}: ${ajvError.message}`;
+}
+
+/**
+ * Format the AJV errors of a rejected manifest. The generic "must match a
+ * schema in anyOf" the provider rule produces at the manifest root — with one
+ * "must have required property" sibling per capability field — would not tell
+ * the developer what to do: that cluster is collapsed into the explicit rule
+ * (capabilities/provider-type.md).
+ * @param {object[]} ajvErrors - Errors produced by AJV.
+ * @returns {string[]} Human-readable reasons.
+ */
+function formatAjvErrors(ajvErrors) {
+  const providerRule = ajvErrors.find((ajvError) => ajvError.keyword === 'anyOf' && ajvError.instancePath === '');
+  if (providerRule === undefined) {
+    return ajvErrors.map(formatAjvError);
+  }
+  // The rule is an if/then at the manifest root: the `if` error, the `anyOf`
+  // error and its `required` siblings all live under that allOf entry.
+  const clusterPath = `${providerRule.schemaPath.slice(0, providerRule.schemaPath.indexOf('/then/anyOf'))}/`;
+  return [
+    ...ajvErrors.filter((ajvError) => !ajvError.schemaPath.startsWith(clusterPath)).map(formatAjvError),
+    `manifest.type: a provider integration must declare at least one capability field` +
+      ` (${CAPABILITY_MANIFEST_FIELDS.join(', ')})`,
+  ];
 }
 
 /**
@@ -87,23 +124,27 @@ function forEachPortPlaceholder(text, callback) {
 /**
  * Rules on the {{port:<name>}} placeholders of a `section` text (C.1): every
  * referenced name must be the `name` of a port declared in the manifest — an
- * unknown reference would sit unresolved on screen forever. In the per-user
- * contact schema the placeholder is refused outright: that block is the one
- * screen a non-admin reaches, and their reduced view carries no container
- * state, so the token would resolve for an admin and stay raw for everyone
- * else. `{{gladys_host}}` stays allowed everywhere (the browser resolves it
- * whatever the role), hence no rule here.
+ * unknown reference would sit unresolved on screen forever. Some screens
+ * refuse the placeholder outright, declared or not: the per-user contact
+ * schema (the one screen a non-admin reaches, whose reduced view carries no
+ * container state, so the token would resolve for an admin and stay raw for
+ * everyone else), the widget settings (the dashboard editor is reachable by
+ * non-admins for the same reason) and the scene editor (which never loads the
+ * container detail that resolves it). `{{gladys_host}}` stays allowed
+ * everywhere (the browser resolves it whatever the role), hence no rule here.
  * @param {object} field - A `section` config field.
  * @param {string} path - Dotted path of the field, for error messages.
- * @param {{declaredPortNames: Set<string>, perUser: boolean}} context - Port names declared in the manifest, and whether the list is the per-user contact schema.
+ * @param {{declaredPortNames: Set<string>, portPlaceholdersUnavailableIn?: string}} context - Port names declared in the manifest, and the name of the screen refusing the placeholder outright, if any.
  * @returns {string[]} Reasons, empty when valid.
  */
 function validateSectionPortPlaceholders(field, path, context) {
   const errors = [];
   const check = (text, textPath) =>
     forEachPortPlaceholder(text, (name, language) => {
-      if (context.perUser) {
-        errors.push(`${textPath}.${language}: {{port:${name}}} is not available in the per-user contact schema`);
+      if (context.portPlaceholdersUnavailableIn !== undefined) {
+        errors.push(
+          `${textPath}.${language}: {{port:${name}}} is not available in ${context.portPlaceholdersUnavailableIn}`,
+        );
       } else if (!context.declaredPortNames.has(name)) {
         errors.push(`${textPath}.${language}: {{port:${name}}} does not reference any declared port name`);
       }
@@ -117,10 +158,11 @@ function validateSectionPortPlaceholders(field, path, context) {
  * Rules on a flat list of config fields that JSON Schema cannot express:
  * key uniqueness, default/type consistency, min/max consistency, section
  * placeholder references. Used for the manifest `config_schema`, the
- * `contact_schema` and each action mini form (`fields`).
+ * `contact_schema`, each action mini form (`fields`), each widget `settings`
+ * list and the `fields` of each scene trigger / action.
  * @param {object[]} configSchema - Flat list of config fields.
  * @param {string} basePath - Dotted path of the list, for error messages.
- * @param {{declaredPortNames: Set<string>, perUser: boolean}} context - Port names declared in the manifest, and whether the list is the per-user contact schema.
+ * @param {{declaredPortNames: Set<string>, portPlaceholdersUnavailableIn?: string}} context - Port names declared in the manifest, and the name of the screen refusing the {{port:<name>}} placeholder outright, if any.
  * @returns {string[]} Reasons, empty when valid.
  */
 function validateConfigSchemaRules(configSchema, basePath, context) {
@@ -230,7 +272,7 @@ function validateSubContainerRules(containers) {
  * Rules on the `actions` list that JSON Schema cannot express: key uniqueness
  * and the config-field rules of each mini form (keys unique within an action).
  * @param {object[]} actions - The manifest `actions` array.
- * @param {{declaredPortNames: Set<string>, perUser: boolean}} context - Port names declared in the manifest, and whether the list is the per-user contact schema.
+ * @param {{declaredPortNames: Set<string>}} context - Port names declared in the manifest.
  * @returns {string[]} Reasons, empty when valid.
  */
 function validateActionRules(actions, context) {
@@ -268,11 +310,123 @@ function validateWebhookRules(webhooks) {
 }
 
 /**
+ * Rules on the `widgets` list that JSON Schema cannot express
+ * (capabilities/dashboard-widgets.md §1): key uniqueness (the key identifies
+ * the widget in the dashboard box, the API and the WebSocket messages) and
+ * the config-field rules of each `settings` list — keys unique within the
+ * widget, and the {{port:<name>}} placeholder refused in its sections: the
+ * dashboard editor is reachable by non-admins, whose reduced view carries no
+ * container state.
+ * @param {object[]} widgets - The manifest `widgets` array.
+ * @param {{declaredPortNames: Set<string>}} context - Port names declared in the manifest.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateWidgetRules(widgets, context) {
+  const errors = [];
+  const seenKeys = new Set();
+  widgets.forEach((widget, i) => {
+    const path = `manifest.widgets.${i}`;
+    if (seenKeys.has(widget.key)) {
+      errors.push(`${path}.key: duplicate key "${widget.key}"`);
+    }
+    seenKeys.add(widget.key);
+    if (widget.settings !== undefined) {
+      errors.push(
+        ...validateConfigSchemaRules(widget.settings, `${path}.settings`, {
+          ...context,
+          portPlaceholdersUnavailableIn: 'widget settings',
+        }),
+      );
+    }
+  });
+  return errors;
+}
+
+/**
+ * Rules on a `scene_triggers` / `scene_actions` list that JSON Schema cannot
+ * express (capabilities/scene-triggers-and-actions.md §3): key uniqueness
+ * within the list (triggers and actions are two namespaces — the scenes
+ * store the key, which is never renamed once published), the config-field
+ * rules of each `fields` mini form — keys unique within the declaration, and
+ * the {{port:<name>}} placeholder refused in its sections: the scene editor
+ * never loads the container detail that resolves it — and the key uniqueness
+ * of the `variables` / `outputs` whitelist.
+ * @param {object[]} declarations - The manifest `scene_triggers` or `scene_actions` array.
+ * @param {string} listName - "scene_triggers" or "scene_actions".
+ * @param {{declaredPortNames: Set<string>}} context - Port names declared in the manifest.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateSceneDeclarationRules(declarations, listName, context) {
+  const errors = [];
+  const seenKeys = new Set();
+  const variablesName = SCENE_DECLARATION_LISTS[listName];
+  declarations.forEach((declaration, i) => {
+    const path = `manifest.${listName}.${i}`;
+    if (seenKeys.has(declaration.key)) {
+      errors.push(`${path}.key: duplicate key "${declaration.key}"`);
+    }
+    seenKeys.add(declaration.key);
+    if (declaration.fields !== undefined) {
+      errors.push(
+        ...validateConfigSchemaRules(declaration.fields, `${path}.fields`, {
+          ...context,
+          portPlaceholdersUnavailableIn: 'the scene editor',
+        }),
+      );
+    }
+    const variables = declaration[variablesName];
+    if (variables !== undefined) {
+      const seenVariableKeys = new Set();
+      variables.forEach((variable, variableIndex) => {
+        if (seenVariableKeys.has(variable.key)) {
+          errors.push(`${path}.${variablesName}.${variableIndex}.key: duplicate key "${variable.key}"`);
+        }
+        seenVariableKeys.add(variable.key);
+      });
+    }
+  });
+  return errors;
+}
+
+/**
+ * Compatibility gate of the manifest additions: older Gladys releases
+ * validate manifests with a strict field allowlist (and a closed `type` enum)
+ * and reject any unknown field or type at install/update time. A manifest
+ * declaring one of them must therefore require a range no older core
+ * satisfies, which turns a cryptic install failure on old instances into the
+ * standard "requires Gladys ≥ X" catalog filter. Only meaningful on a valid
+ * range: an invalid `gladys_version` is already reported on its own.
+ * @param {object} manifest - Schema-validated manifest with a valid gladys_version range.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateGladysVersionGates(manifest) {
+  const minimumVersion = semver.minVersion(manifest.gladys_version);
+  const satisfies = (version) => minimumVersion !== null && semver.gte(minimumVersion, version);
+  const errors = [];
+  const typeMinimum = MANIFEST_TYPE_MIN_GLADYS_VERSION[manifest.type];
+  if (typeMinimum !== undefined && !satisfies(typeMinimum)) {
+    errors.push(
+      `manifest.gladys_version: type "${manifest.type}" requires ">=${typeMinimum}" at minimum` +
+        ` (older Gladys releases reject manifests carrying an unknown type)`,
+    );
+  }
+  Object.entries(MANIFEST_FIELD_MIN_GLADYS_VERSION).forEach(([field, fieldMinimum]) => {
+    if (manifest[field] !== undefined && !satisfies(fieldMinimum)) {
+      errors.push(
+        `manifest.gladys_version: declaring ${field} requires ">=${fieldMinimum}" at minimum` +
+          ` (older Gladys releases reject manifests carrying unknown fields)`,
+      );
+    }
+  });
+  return errors;
+}
+
+/**
  * Validate an integration manifest: JSON Schema first, then the rules the
- * schema cannot express (strict semver, semver range, image references,
- * config_schema/contact_schema/containers/actions/webhooks consistency,
- * sub-container port name uniqueness and {{port:<name>}} placeholder
- * references).
+ * schema cannot express (strict semver, semver range and its compatibility
+ * gates, image references, config_schema/contact_schema/containers/actions/
+ * webhooks/widgets/scene declarations consistency, sub-container port name
+ * uniqueness and {{port:<name>}} placeholder references).
  * Indexer and Gladys server apply the same rules.
  * @param {*} manifest - Parsed content of gladys-assistant-integration.json.
  * @returns {{valid: boolean, errors: string[]}} Validation result.
@@ -296,7 +450,7 @@ export function validateManifest(manifest) {
   }
 
   if (!validateAgainstSchema(manifest)) {
-    return { valid: false, errors: validateAgainstSchema.errors.map(formatAjvError) };
+    return { valid: false, errors: formatAjvErrors(validateAgainstSchema.errors) };
   }
 
   const errors = [];
@@ -305,19 +459,8 @@ export function validateManifest(manifest) {
   }
   if (semver.validRange(manifest.gladys_version) === null) {
     errors.push('manifest.gladys_version: must be a valid semver range');
-  } else if (manifest.categories !== undefined) {
-    // Older cores validate manifests with a strict field allowlist and reject
-    // any unknown top-level field at install/update time: declaring
-    // `categories` therefore requires a range no older core satisfies, which
-    // turns a cryptic install failure on old instances into the standard
-    // "requires Gladys ≥ X" catalog filter.
-    const minimumVersion = semver.minVersion(manifest.gladys_version);
-    if (minimumVersion === null || semver.lt(minimumVersion, CATEGORIES_MIN_GLADYS_VERSION)) {
-      errors.push(
-        `manifest.gladys_version: declaring categories requires ">=${CATEGORIES_MIN_GLADYS_VERSION}"` +
-          ` at minimum (older Gladys releases reject manifests carrying unknown fields)`,
-      );
-    }
+  } else {
+    errors.push(...validateGladysVersionGates(manifest));
   }
   if (!isValidDockerImageReference(manifest.docker_image)) {
     errors.push('manifest.docker_image: must be a valid image reference with an explicit tag or digest');
@@ -325,7 +468,7 @@ export function validateManifest(manifest) {
   // Gathered first: the section texts of the config_schema and of the action
   // mini forms may reference these names with a {{port:<name>}} placeholder.
   const declaredPortNames = collectDeclaredPortNames(manifest.containers);
-  const adminContext = { declaredPortNames, perUser: false };
+  const adminContext = { declaredPortNames };
   if (manifest.config_schema !== undefined) {
     errors.push(...validateConfigSchemaRules(manifest.config_schema, 'manifest.config_schema', adminContext));
   }
@@ -335,7 +478,7 @@ export function validateManifest(manifest) {
     errors.push(
       ...validateConfigSchemaRules(manifest.contact_schema, 'manifest.contact_schema', {
         declaredPortNames,
-        perUser: true,
+        portPlaceholdersUnavailableIn: 'the per-user contact schema',
       }),
     );
   }
@@ -348,6 +491,14 @@ export function validateManifest(manifest) {
   if (manifest.webhooks !== undefined) {
     errors.push(...validateWebhookRules(manifest.webhooks));
   }
+  if (manifest.widgets !== undefined) {
+    errors.push(...validateWidgetRules(manifest.widgets, adminContext));
+  }
+  Object.keys(SCENE_DECLARATION_LISTS).forEach((listName) => {
+    if (manifest[listName] !== undefined) {
+      errors.push(...validateSceneDeclarationRules(manifest[listName], listName, adminContext));
+    }
+  });
 
   return { valid: errors.length === 0, errors };
 }
