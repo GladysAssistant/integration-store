@@ -18,7 +18,7 @@ describe('writeOutput', () => {
     await rm(outputDir, { recursive: true, force: true });
   });
 
-  it('should write index.json, rejected.json, the schema, the covers, the placeholder and the docs', async () => {
+  it('should write index.json, rejected.json, the schemas, the covers, the placeholder and the docs', async () => {
     const index = { index_format: 1, generated_at: '2026-07-13T08:00:00.000Z', integrations: [] };
     const rejected = [{ store_slug: 'a/b', level: 'error', reason: 'nope', checked_at: '2026-07-13T08:00:00.000Z' }];
     const coverFiles = [{ fileName: 'john--demo.jpg', data: Buffer.from('jpeg-bytes') }];
@@ -34,6 +34,12 @@ describe('writeOutput', () => {
 
     const publishedSchema = JSON.parse(await readFile(path.join(outputDir, 'manifest.schema.json'), 'utf8'));
     expect(publishedSchema.$id).to.equal('https://gladysassistant.github.io/integration-store/manifest.schema.json');
+    const publishedWidgetSchema = JSON.parse(
+      await readFile(path.join(outputDir, 'widget-content.schema.json'), 'utf8'),
+    );
+    expect(publishedWidgetSchema.$id).to.equal(
+      'https://gladysassistant.github.io/integration-store/widget-content.schema.json',
+    );
 
     const cover = await readFile(path.join(outputDir, 'covers', 'john--demo.jpg'));
     expect(cover.toString()).to.equal('jpeg-bytes');

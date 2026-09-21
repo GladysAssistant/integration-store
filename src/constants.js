@@ -63,13 +63,34 @@ export const INTEGRATION_CATALOG_CATEGORIES = [
   'services',
 ];
 
-// First Gladys release whose manifest validator accepts the `categories`
-// field. Older cores validate manifests with a strict field allowlist and
-// reject any unknown top-level field at install/update time: a manifest
-// declaring `categories` must therefore require at least this version, which
-// turns a cryptic install failure into the standard "requires Gladys ≥ X"
-// catalog filter.
-export const CATEGORIES_MIN_GLADYS_VERSION = '4.86.0';
+// Older Gladys releases validate manifests with a strict field allowlist and
+// reject any unknown top-level field — or unknown `type` value — at
+// install/update time. A manifest declaring one of the fields below must
+// therefore require at least the first release whose validator accepts it,
+// which turns a cryptic install failure on old instances into the standard
+// "requires Gladys ≥ X" catalog filter (integration-catalog-categories.md
+// §6.2, generalized to every later addition of the manifest contract).
+export const MANIFEST_FIELD_MIN_GLADYS_VERSION = {
+  categories: '4.86.0',
+  // capability fields: dashboard widgets (capabilities/dashboard-widgets.md)
+  // and scene triggers / actions (capabilities/scene-triggers-and-actions.md)
+  widgets: '5.1.0',
+  scene_triggers: '5.1.0',
+  scene_actions: '5.1.0',
+};
+// Same gate for the `type` values added after the first release: an older
+// core rejects an unknown type with "must be one of device, communication…".
+export const MANIFEST_TYPE_MIN_GLADYS_VERSION = {
+  // capabilities/provider-type.md: an integration made only of capabilities
+  provider: '5.1.0',
+};
+
+// The capability fields (capabilities/provider-type.md): contracts the core
+// does not consume through a dedicated interface, declarable by every type on
+// top of its primary contract. A `provider` integration — no device surface,
+// no core-consumed interface — must declare at least one of them (the rule
+// lives in the schema, its explicit error message in validateManifest).
+export const CAPABILITY_MANIFEST_FIELDS = ['widgets', 'scene_triggers', 'scene_actions'];
 
 // Timeout of every outbound HTTP request: a slow host must fail fast, not
 // hang the whole indexing run.
