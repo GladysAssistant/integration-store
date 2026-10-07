@@ -148,7 +148,8 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
 
 /**
  * Build the store index from the repositories tagged with the store topic:
- * skip the blocked ones (data/blocklist.json), fetch each manifest, validate it (schema + code rules), check the mandatory
+ * skip the blocked ones (data/blocklist.json), fetch each manifest, validate
+ * it (schema + code rules), check the mandatory
  * user documentation (docs/en.md + docs/fr.md, re-hosted), check that the
  * Docker images (main and sub-containers) actually exist on their registry,
  * validate and re-host each cover, and produce the deterministic
