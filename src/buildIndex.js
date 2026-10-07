@@ -1,3 +1,4 @@
+import { EMPTY_BLOCKLIST, blocklistRejectionReason, findBlocklistEntry } from './blocklist.js';
 import { resolveCategories } from './categories.js';
 import {
   DOCS_LANGUAGES,
@@ -147,7 +148,7 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
 
 /**
  * Build the store index from the repositories tagged with the store topic:
- * fetch each manifest, validate it (schema + code rules), check the mandatory
+ * skip the blocked ones (data/blocklist.json), fetch each manifest, validate it (schema + code rules), check the mandatory
  * user documentation (docs/en.md + docs/fr.md, re-hosted), check that the
  * Docker images (main and sub-containers) actually exist on their registry,
  * validate and re-host each cover, and produce the deterministic
@@ -163,6 +164,7 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
  * @param {string} options.now - ISO 8601 timestamp of the crawl (injected: keeps the output deterministic).
  * @param {object} options.categoryFallback - Map of store_slug → fallback categories (data/category-fallback.json).
  * @param {object|null} options.previousIndex - Index published by the previous crawl (first_seen_at continuity), null when none exists yet.
+ * @param {{repositories: object, owners: object}} [options.blocklist] - Blocked repositories and owners (data/blocklist.json).
  * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[], docsFiles: {fileName: string, data: Buffer}[]}>} Build result.
  */
 export async function buildIndex({
@@ -175,6 +177,7 @@ export async function buildIndex({
   now,
   categoryFallback = {},
   previousIndex = null,
+  blocklist = EMPTY_BLOCKLIST,
 }) {
   const integrations = [];
   const rejected = [];
@@ -188,6 +191,16 @@ export async function buildIndex({
     const reject = (level, reason) => {
       rejected.push({ store_slug: repository.storeSlug, level, reason, checked_at: now });
     };
+
+    // Blocklist (README § Moderation): a blocked repository is skipped before
+    // any fetch — nothing of it (manifest, docs, cover, registry) is read,
+    // let alone re-hosted — and the exclusion is published, auditable, in
+    // rejected.json.
+    const blocked = findBlocklistEntry({ storeSlug: repository.storeSlug, owner: repository.owner, blocklist });
+    if (blocked !== null) {
+      reject(REJECTION_LEVELS.ERROR, blocklistRejectionReason(blocked));
+      continue;
+    }
 
     const { manifest, rejectionReason } = await resolveManifest(repository, fetchManifestFile);
     if (rejectionReason !== undefined) {

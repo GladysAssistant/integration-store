@@ -1,3 +1,4 @@
+import { loadBlocklist } from './blocklist.js';
 import { buildIndex } from './buildIndex.js';
 import { loadCategoryFallback } from './categories.js';
 import { checkDockerImage } from './checkDockerImage.js';
@@ -35,6 +36,7 @@ const { index, rejected, coverFiles, docsFiles } = await buildIndex({
   now: new Date().toISOString(),
   categoryFallback: loadCategoryFallback(),
   previousIndex,
+  blocklist: loadBlocklist(),
 });
 
 await writeOutput({ outputDir, index, rejected, coverFiles, docsFiles });
