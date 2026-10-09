@@ -73,7 +73,7 @@ A pull request that bumps `version` and `docker_image` references an image tag t
 npx github:GladysAssistant/integration-store --skip-image-check
 ```
 
-Every other check still runs (schema and code rules, docs, cover, categories) and the image reference format is still validated; each skipped image is reported as a warning, so the run never claims a verification it did not do.
+Every other check still runs (schema and code rules, docs, cover, categories) and the image reference format is still validated; each skipped image is reported as a warning, so the run never claims a verification it did not do. With the flag, exit code `0` means every other check passes: the integration would be indexed only once its images are published.
 
 The indexer itself always checks the images and rejects an integration whose image is missing — it is then dropped from the catalog until the next indexing. So publish the images **before** the manifest that references them reaches the default branch, and run the validator once more **without** the flag once they are published (e.g. as the last step of your release workflow).
 

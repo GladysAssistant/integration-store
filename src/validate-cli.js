@@ -9,7 +9,8 @@
 // the CI of a pull request, where the bumped image tag is not pushed yet);
 // every other check still runs.
 //
-// Exit code 0: the integration would be indexed (possibly with warnings).
+// Exit code 0: the integration would be indexed (possibly with warnings) —
+//   with --skip-image-check, only once its Docker images are published.
 // Exit code 1: the integration would be rejected.
 // Exit code 2: invalid command-line arguments.
 
@@ -55,7 +56,16 @@ if (errorCount > 0) {
   );
   process.exit(1);
 }
-if (warningCount > 0) {
+// A skipped registry check is not a catalog degradation: the indexer rejects
+// a missing image, so the summary must not promise an indexing it cannot vouch for.
+if (skipImageCheck) {
+  console.log(
+    `\n✔ Every other check passes with ${warningCount} warning(s), but the Docker images were NOT checked` +
+      ` (--${SKIP_IMAGE_CHECK_FLAG}): the integration would be indexed only once they are published.` +
+      ' Publish them before the manifest that references them reaches the default branch, then run again' +
+      ' without the flag.',
+  );
+} else if (warningCount > 0) {
   console.log(
     `\n✔ Valid with ${warningCount} warning(s): the integration would be indexed, with the degradations above.`,
   );
@@ -66,10 +76,3 @@ console.log(
   '\nRemember what can only be checked once published: the repository must be public,' +
     ` tagged with the "${STORE_TOPIC}" topic, and the manifest pushed at the root of the default branch.`,
 );
-if (skipImageCheck) {
-  console.log(
-    `The Docker images were not checked (--${SKIP_IMAGE_CHECK_FLAG}): publish them before the manifest` +
-      ' that references them reaches the default branch, then run again without the flag — the indexer' +
-      ' rejects an integration whose image is missing.',
-  );
-}
