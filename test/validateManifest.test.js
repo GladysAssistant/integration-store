@@ -585,6 +585,84 @@ describe('validateManifest', () => {
     });
   });
 
+  describe('credential_keys', () => {
+    // index of the account_link field of the reference manifest
+    const ACCOUNT_FIELD = 4;
+
+    /**
+     * The reference manifest with credential keys on its account field, on a
+     * range that accepts them.
+     * @param {string[]} credentialKeys - The keys to declare.
+     * @returns {object} A fresh manifest.
+     */
+    function buildCredentialManifest(credentialKeys) {
+      const manifest = buildManifest();
+      manifest.gladys_version = '>=5.1.5';
+      manifest.config_schema[ACCOUNT_FIELD].credential_keys = credentialKeys;
+      return manifest;
+    }
+
+    it('should accept the credential keys of an account field', () => {
+      const manifest = buildCredentialManifest(['session_pass_token', 'session_user_id']);
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject credential keys on a field that is not an account field', () => {
+      const manifest = buildCredentialManifest(['token']);
+      manifest.config_schema[1].credential_keys = ['other_token'];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+
+    it('should reject an empty, duplicated or malformed list', () => {
+      expect(validateManifest(buildCredentialManifest([])).valid).to.equal(false);
+      expect(validateManifest(buildCredentialManifest(['token', 'token'])).valid).to.equal(false);
+      expect(validateManifest(buildCredentialManifest(['Access-Token'])).valid).to.equal(false);
+    });
+
+    it('should reject the reserved keys', () => {
+      const manifest = buildCredentialManifest(['gladys_prefer_local', 'external_integration_container_ports']);
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.credential_keys.0: "gladys_prefer_local" is reserved',
+        'manifest.config_schema.4.credential_keys.1: "external_integration_container_ports" is reserved',
+      ]);
+    });
+
+    it('should reject a key that is a setting of the form', () => {
+      const manifest = buildCredentialManifest(['latitude']);
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.4.credential_keys.0: "latitude" is a config_schema key',
+      ]);
+    });
+
+    it('should reject a key owned by two account fields', () => {
+      const manifest = buildCredentialManifest(['token']);
+      manifest.config_schema.push({
+        key: 'second_account',
+        type: 'oauth2',
+        label: { en: 'Second account' },
+        credential_keys: ['token'],
+      });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.5.credential_keys.0: "token" is already a credential key of vendor_account',
+      ]);
+    });
+
+    it('should gate credential keys behind the first Gladys release accepting them', () => {
+      const manifest = buildCredentialManifest(['token']);
+      manifest.gladys_version = '>=5.1.0';
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.gladys_version: declaring credential_keys on a config_schema field requires ">=5.1.5" at minimum' +
+          ' (older Gladys releases reject config fields carrying unknown properties)',
+      ]);
+    });
+
+    it('should not gate a manifest without config_schema', () => {
+      const manifest = buildManifest();
+      delete manifest.config_schema;
+      expect(validateManifest(manifest).valid).to.equal(true);
+    });
+  });
+
   describe('categories', () => {
     it('should accept 1 to 3 unique non-empty strings, without any vocabulary enum in the schema', () => {
       const manifest = buildManifest();
