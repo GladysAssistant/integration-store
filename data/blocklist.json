@@ -1,0 +1,5 @@
+{
+  "$comment": "Integrations excluded from the index (README § Moderation). Public denylist of exceptions for the fraudulent case only — never a quality judgement. `repositories` is keyed by store_slug (owner/repo), `owners` by GitHub login (an account that keeps republishing under new repository names; a store_slug alone is escaped by a simple rename). Matching is case-insensitive. Every entry carries a public `reason` (published verbatim in rejected.json), a `reference` (https URL, in practice the issue of this repository documenting the case) and a `blocked_at` date (YYYY-MM-DD). Validated by the test suite; amendable by pull request only.",
+  "repositories": {},
+  "owners": {}
+}

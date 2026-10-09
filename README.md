@@ -12,14 +12,15 @@ GitHub topic `gladys-assistant-integration`      (source of truth, distributed)
         ▼  hourly GitHub Action (+ manual trigger)
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. search public repositories tagged with the topic          │
-│ 2. fetch gladys-assistant-integration.json from each repo    │
-│ 3. validate mechanically (JSON Schema + code rules)          │
-│ 4. check the mandatory user docs (docs/en.md + docs/fr.md)   │
-│ 5. check the Docker image exists on its registry             │
-│ 6. download, validate and re-host each cover image           │
-│ 7. resolve the browse categories (manifest, else fallback    │
+│ 2. skip the ones listed in data/blocklist.json (fraud)       │
+│ 3. fetch gladys-assistant-integration.json from each repo    │
+│ 4. validate mechanically (JSON Schema + code rules)          │
+│ 5. check the mandatory user docs (docs/en.md + docs/fr.md)   │
+│ 6. check the Docker image exists on its registry             │
+│ 7. download, validate and re-host each cover image           │
+│ 8. resolve the browse categories (manifest, else fallback    │
 │    mapping) and carry first_seen_at over the previous index  │
-│ 8. build index.json + rejected.json (deterministic)          │
+│ 9. build index.json + rejected.json (deterministic)          │
 └─────────────────────────────────────────────────────────────┘
         │
         ▼  upload to a Cloudflare R2 bucket (S3-compatible, CDN-fronted)
@@ -41,7 +42,7 @@ No account to create, no PR to get approved:
 5. Wait for the next hourly indexing: your integration appears in the catalog of every Gladys instance.
 6. Publish a new version = bump `version` and `docker_image` in the manifest and push. That's it.
 
-If your integration does not show up, check the public `rejected.json` (at `<STORE_BASE_URL>/rejected.json`): every rejected manifest is listed with the reason, so you can diagnose it yourself.
+If your integration does not show up, check the public `rejected.json` (at `<STORE_BASE_URL>/rejected.json`): every rejected manifest is listed with the reason, so you can diagnose it yourself. A reason prefixed by `blocklist:` means the repository is listed in [`data/blocklist.json`](data/blocklist.json) (see [Moderation](#moderation-the-blocklist)).
 
 ## Test your integration locally
 
@@ -242,9 +243,14 @@ Everything is uploaded to the R2 bucket and served over its public URL (`<STORE_
 | `covers/placeholder.png`            | cover used when an integration has none                                                                                                                                                                              |
 | `docs/<owner>--<repo>/<lang>.md`    | re-hosted mandatory user documentation (`en` and `fr`)                                                                                                                                                               |
 
-## Moderation (v1: none, on purpose)
+## Moderation: the blocklist
 
-There is **no moderation in v1**: no blocklist, no manual removal. The real defenses are the strict Docker sandbox on the Gladys side, the explicit warning shown before installation, and the GitHub metadata (stars, repository age) visible in the catalog. A blocklist can be added later on the indexer side without touching any Gladys client.
+The store approves nothing a priori. The only moderation is a **public denylist of exceptions**, [`data/blocklist.json`](data/blocklist.json), applied by the indexer on top of the mechanical admission rules. It exists for the fraudulent case — an integration impersonating another one, a Docker image that exfiltrates credentials, phishing in the documentation — never for quality disputes. The real defenses for everything else remain the strict Docker sandbox on the Gladys side, the explicit warning shown before installation, and the GitHub metadata (stars, repository age) visible in the catalog.
+
+- **Two kinds of entries**: `repositories`, keyed by `store_slug` (`owner/repo`), and `owners`, keyed by GitHub login — for an account that keeps republishing under new repository names (a `store_slug` alone is escaped by a simple repository rename). Matching is case-insensitive, and a `repositories` entry wins over an `owners` one. Every entry carries a public `reason` (published verbatim), a `reference` (an https URL — in practice the issue of this repository documenting the case) and a `blocked_at` date. The test suite validates the file, and an invalid file aborts the indexing run rather than silently re-admitting anything.
+- **Effect**: a blocked repository is skipped **before any fetch** — no manifest, documentation, cover or registry request, so nothing of it is re-hosted on the store domain. It is listed in `rejected.json` with `level: "error"` and a reason prefixed by `blocklist:` carrying the public reason and reference, so every removal is auditable by anyone.
+- **Process**: open an issue labelled `blocklist` describing the case, then a pull request adding the entry with the issue as `reference`. Merging publishes a new index within minutes — the build workflow runs on every push to `main` — without waiting for the hourly crawl. Unblocking is the reverse pull request. A fork of the store is free to empty or replace the file.
+- **Limits**: the blocklist removes an integration from the catalog and stops its update detection; it does not uninstall it from running instances. Files already re-hosted (covers, docs) stay in the bucket, unreferenced, per the no-delete policy below. An integration blocked then unblocked is stamped with a new `first_seen_at`.
 
 Files are uploaded to R2, never deleted: the freshly written `index.json`/`rejected.json` always reference the current covers and docs, so a file left behind by a removed integration is simply unreferenced (pruning is left out on purpose, so the credentials never need delete rights). The index and rejection documents are served with a short `Cache-Control` (they change on every crawl); documentation pages get a medium one (stable URL, content follows the repository); covers and the schema are cached hard.
 

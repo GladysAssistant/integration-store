@@ -657,4 +657,92 @@ describe('buildIndex', () => {
     expect(second.index).to.deep.equal(first.index);
     expect(second.rejected).to.deep.equal(first.rejected);
   });
+
+  describe('blocklist', () => {
+    const blocklist = {
+      repositories: {
+        'evil-corp/gladys-philips-hue': {
+          reason: 'Impersonates the official Philips Hue integration',
+          reference: 'https://github.com/GladysAssistant/integration-store/issues/42',
+          blocked_at: '2026-10-06',
+        },
+      },
+      owners: {
+        'another-evil': {
+          reason: 'Keeps republishing malicious integrations',
+          reference: 'https://github.com/GladysAssistant/integration-store/issues/43',
+          blocked_at: '2026-10-06',
+        },
+      },
+    };
+
+    /**
+     * Fetchers that fail the test if called: a blocked repository must never be fetched.
+     * @returns {object} Fetchers.
+     */
+    function neverCalled() {
+      const fail = async () => {
+        throw new Error('a blocked repository must not be fetched');
+      };
+      return { fetchManifestFile: fail, fetchDocFile: fail, checkDockerImage: fail, downloadCover: fail };
+    }
+
+    it('should exclude a blocked repository before any fetch and publish the reason', async () => {
+      const { index, rejected, coverFiles, docsFiles } = await buildIndex({
+        repositories: [repository('Evil-Corp', 'gladys-philips-hue')],
+        ...neverCalled(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+        blocklist,
+      });
+      expect(index.integrations).to.deep.equal([]);
+      expect(rejected).to.deep.equal([
+        {
+          store_slug: 'Evil-Corp/gladys-philips-hue',
+          level: 'error',
+          reason:
+            'blocklist: repository is blocked — Impersonates the official Philips Hue integration' +
+            ' (see https://github.com/GladysAssistant/integration-store/issues/42)',
+          checked_at: NOW,
+        },
+      ]);
+      expect(coverFiles).to.deep.equal([]);
+      expect(docsFiles).to.deep.equal([]);
+    });
+
+    it('should exclude every repository of a blocked owner, whatever its name', async () => {
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('another-evil', 'brand-new-repo')],
+        ...neverCalled(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+        blocklist,
+      });
+      expect(index.integrations).to.deep.equal([]);
+      expect(rejected).to.have.lengthOf(1);
+      expect(rejected[0].level).to.equal('error');
+      expect(rejected[0].reason).to.equal(
+        'blocklist: owner "another-evil" is blocked — Keeps republishing malicious integrations' +
+          ' (see https://github.com/GladysAssistant/integration-store/issues/43)',
+      );
+    });
+
+    it('should index the other repositories normally', async () => {
+      const goodManifest = manifest();
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('john', 'gladys-open-meteo-demo'), repository('evil-corp', 'gladys-philips-hue')],
+        fetchManifestFile: fakeManifestFetcher({
+          'john/gladys-open-meteo-demo': { status: 'ok', raw: JSON.stringify(goodManifest) },
+        }),
+        checkDockerImage: fakeImageChecker(),
+        fetchDocFile: fakeDocFetcher(),
+        downloadCover: fakeCoverDownloader(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+        blocklist,
+      });
+      expect(index.integrations.map((entry) => entry.store_slug)).to.deep.equal(['john/gladys-open-meteo-demo']);
+      expect(rejected.map((entry) => entry.store_slug)).to.include('evil-corp/gladys-philips-hue');
+    });
+  });
 });

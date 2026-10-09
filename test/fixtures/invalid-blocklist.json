@@ -1,0 +1,6 @@
+{
+  "repositories": {
+    "evil-corp/gladys-philips-hue": { "reason": "", "reference": "http://example.com", "blocked_at": "yesterday" }
+  },
+  "owners": {}
+}
