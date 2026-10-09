@@ -77,12 +77,26 @@ export const MANIFEST_FIELD_MIN_GLADYS_VERSION = {
   widgets: '5.1.0',
   scene_triggers: '5.1.0',
   scene_actions: '5.1.0',
+  // per-user account form of the calendar type (capabilities/calendar-type.md)
+  account_schema: '5.2.0',
+  // energy contracts capability (capabilities/energy-contracts.md)
+  energy_contracts: '5.2.0',
 };
 // Same gate for the `type` values added after the first release: an older
 // core rejects an unknown type with "must be one of device, communication…".
 export const MANIFEST_TYPE_MIN_GLADYS_VERSION = {
   // capabilities/provider-type.md: an integration made only of capabilities
   provider: '5.1.0',
+  // capabilities/calendar-type.md: calendar providers pushing into the core
+  // calendar store
+  calendar: '5.2.0',
+};
+// Same gate for the dynamic `source` values of a select / multi_select field
+// (C.1), whatever the form declaring the field: an older core rejects a source
+// it does not know with "must be one of devices".
+export const CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION = {
+  // the houses of Gladys, by selector
+  houses: '5.2.0',
 };
 
 // The capability fields (capabilities/provider-type.md): contracts the core
@@ -90,7 +104,7 @@ export const MANIFEST_TYPE_MIN_GLADYS_VERSION = {
 // top of its primary contract. A `provider` integration — no device surface,
 // no core-consumed interface — must declare at least one of them (the rule
 // lives in the schema, its explicit error message in validateManifest).
-export const CAPABILITY_MANIFEST_FIELDS = ['widgets', 'scene_triggers', 'scene_actions'];
+export const CAPABILITY_MANIFEST_FIELDS = ['widgets', 'scene_triggers', 'scene_actions', 'energy_contracts'];
 
 // Timeout of every outbound HTTP request: a slow host must fail fast, not
 // hang the whole indexing run.

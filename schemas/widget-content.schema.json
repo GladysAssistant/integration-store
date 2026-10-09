@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/widget-content.schema.json",
   "title": "Gladys Assistant integration widget content",
-  "description": "Vocabulary of the content an integration returns for one of its dashboard widgets (the `data.content` of the widget.get command result — capabilities/dashboard-widgets.md, sections 4 to 8). The integration describes WHAT to show, the Gladys core decides HOW: no HTML, no script, no CSS, no free color or size — semantic enums, bounded texts, curated icons, fixed image frames. This schema is the canonical published vocabulary (version 1); the core's normalizer is the enforcement that mirrors it, and the SDK dev mode validates a payload against it before sending. The core never rejects a whole content for one bad component: unknown component types and unknown fields are DROPPED, a component missing a required field is dropped, strings are truncated to their bound with an ellipsis — so a payload this schema refuses still renders partially on a Gladys instance, minus what it refused. Evolutions of the vocabulary are additive only (a new component type, a new optional field, a new enum value), each shipped when the core renders it; the `version` envelope exists for the breaking change this doctrine intends never to make. Two rules live outside this schema, enforced by the core and the SDK dev mode: the CONTENT BUDGET (at most 8 components; at most one focal component among `chart`, `card-list` and `image`; at most 6 tiles among `value` and `gauge`; at most 2 `text` of which one `body`; at most 1 `status`; at most 4 `button`; components beyond a cap are dropped in content order — the first ones win) and the CANONICAL ORDER (whatever the order sent, the card renders header texts, then tiles, then the focal component, then the body text and status list, then the buttons). Widget action keys must be unique within the content, and every `min` must be lower than `max`. Every text is rendered as escaped plain text, every link is https with its domain displayed, every image is a key the integration serves on demand (never a third-party URL), every device reference resolves only inside the integration's own devices.",
+  "description": "Vocabulary of the content an integration returns for one of its dashboard widgets (the `data.content` of the widget.get command result — capabilities/dashboard-widgets.md, sections 4 to 8). The integration describes WHAT to show, the Gladys core decides HOW: no HTML, no script, no CSS, no free color or size — semantic enums, bounded texts, curated icons, fixed image frames. This schema is the canonical published vocabulary (version 1); the core's normalizer is the enforcement that mirrors it, and the SDK dev mode validates a payload against it before sending. The core never rejects a whole content for one bad component: unknown component types and unknown fields are DROPPED, a component missing a required field is dropped, strings are truncated to their bound with an ellipsis — so a payload this schema refuses still renders partially on a Gladys instance, minus what it refused. Evolutions of the vocabulary are additive only (a new component type, a new optional field, a new enum value), each shipped when the core renders it; the `version` envelope exists for the breaking change this doctrine intends never to make. Two rules live outside this schema, enforced by the core and the SDK dev mode: the CONTENT BUDGET (at most 8 components; at most one focal component among `chart`, `card-list` and `image`; at most 6 tiles among `value` and `gauge`; at most 2 `text` of which one `body`; at most 1 `status`; at most 4 `button`; components beyond a cap are dropped in content order — the first ones win) and the CANONICAL ORDER (whatever the order sent, the card renders header texts, then tiles, then the focal component, then the body text and status list, then the buttons). Widget action keys must be unique within the content, the keys of an action's `fields` unique within the action, a select field's `default` one of its `options`, and every `min` must be lower than `max`. Every text is rendered as escaped plain text, every link is https with its domain displayed, every image is a key the integration serves on demand (never a third-party URL), every device reference resolves only inside the integration's own devices.",
   "type": "object",
   "additionalProperties": false,
   "required": ["components"],
@@ -931,7 +931,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "label"],
-      "description": "A pill button in the quick-actions visual family, rendered in the last slot of the card (at most 4 per widget, one wrapping row). Exactly one kind per button: a widget `action` (relayed to the integration over widget.action with the declared `params` — never user input — and acked within the widget's `action_timeout_seconds`; a successful action refreshes the widget), a `device_feature` command (the core sends `value` to the feature through the standard device path, the feature must belong to the integration, be writable and accept the value — active state and live updates for free), or a `link` (opened in a new tab, domain displayed).",
+      "description": "A pill button in the quick-actions visual family, rendered in the last slot of the card (at most 4 per widget, one wrapping row). Exactly one kind per button: a widget `action` (relayed to the integration over widget.action with the declared `params` — never user input — and, when the action declares `fields`, the `values` the user typed in the short form opened by the tap, validated by the core against those fields; acked within the widget's `action_timeout_seconds`; a successful action refreshes the widget), a `device_feature` command (the core sends `value` to the feature through the standard device path, the feature must belong to the integration, be writable and accept the value — active state and live updates for free), or a `link` (opened in a new tab, domain displayed).",
       "properties": {
         "type": {
           "const": "button"
@@ -970,7 +970,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["key"],
-          "description": "Widget action: relayed as declared, allowlisted from this very content by the core.",
+          "description": "Widget action: relayed as declared, allowlisted from this very content by the core. With `fields`, a tap opens a form inside the card (pre-filled with the declared defaults) and the typed values travel as `values` next to `params`, never merged into them; `confirm` is then ignored, the form being the confirmation.",
           "properties": {
             "key": {
               "type": "string",
@@ -985,6 +985,14 @@
               "type": "boolean",
               "default": false,
               "description": "Ask the user before sending (`danger` style suggested)."
+            },
+            "fields": {
+              "type": "array",
+              "maxItems": 4,
+              "description": "The form behind the button (capabilities/dashboard-widgets.md §7): at most 4 fields of the manifest `config_schema` grammar, restricted to `string` | `number` | `boolean` | `select` — no `section` (a four-field form needs no chapters), no `multi_select`, no `secret` / `oauth2` / `account_link` (a dashboard is readable by every user), and no `source` (the content is produced at runtime: an integration wanting a list of its devices writes them as static `options`). Keys unique within the action. The core validates the declaration with the manifest's own field validator and drops the button when it is invalid; the typed `values` are validated against it before the relay (unknown key, invalid value, missing required field or string over 1000 characters → 422). An empty list is no form at all. An older core drops the unknown key and runs the action without `values`: an integration relying on them declares the matching `gladys_version` minimum, or refuses an action received without `values`.",
+              "items": {
+                "$ref": "#/definitions/actionField"
+              }
             }
           }
         },
@@ -1065,6 +1073,243 @@
               }
             }
           ]
+        }
+      ]
+    },
+    "actionField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "label"],
+      "description": "A field of the form behind a widget action button: the manifest `config_schema` entry format, restricted. Texts are rendered as escaped plain text and bounded like every widget string (`label` 40 characters per language, `description` 200, `placeholder` 40, option `label` 40, truncated with an ellipsis by the core). `default` must match the field type (a string, a finite number, a boolean, one of the `options`; a string default at most 1000 characters, the bound of a typed value) and is a runtime value: the integration pre-fills the form with what it knows (the last price paid).",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Unique key of the field within the action; the key of its value in `values`."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "boolean", "select"]
+        },
+        "label": {
+          "type": "object",
+          "required": ["en"],
+          "propertyNames": {
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
+        "description": {
+          "type": "object",
+          "required": ["en"],
+          "propertyNames": {
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "placeholder": {
+          "type": "object",
+          "required": ["en"],
+          "propertyNames": {
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "description": "Input placeholder, `string` and `number` fields only."
+        },
+        "required": {
+          "type": "boolean",
+          "default": false,
+          "description": "A required field left empty refuses the submission (422 naming the field)."
+        },
+        "default": {
+          "description": "Default value, pre-filled in the form and applied to an absent value. Must match the field type; a string default is at most 1000 characters."
+        },
+        "min": {
+          "type": "number",
+          "description": "Minimum value, `number` fields only."
+        },
+        "max": {
+          "type": "number",
+          "description": "Maximum value, `number` fields only (greater than or equal to `min`)."
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Choices of a `select` field, static (no `source` in a widget action: the content is produced at runtime).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "label"],
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "object",
+                "required": ["en"],
+                "propertyNames": {
+                  "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                }
+              }
+            }
+          }
+        },
+        "display": {
+          "type": "string",
+          "enum": ["dropdown", "radio"],
+          "description": "Rendering of a `select` field: dropdown (default) or radio buttons."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "select"
+              }
+            }
+          },
+          "then": {
+            "required": ["options"]
+          },
+          "else": {
+            "allOf": [
+              {
+                "not": {
+                  "required": ["options"]
+                }
+              },
+              {
+                "not": {
+                  "required": ["display"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {
+                  "const": "number"
+                }
+              }
+            }
+          },
+          "then": {
+            "allOf": [
+              {
+                "not": {
+                  "required": ["min"]
+                }
+              },
+              {
+                "not": {
+                  "required": ["max"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {
+                  "enum": ["string", "number"]
+                }
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["placeholder"]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "number"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "select"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "string"
+              }
+            }
+          }
         }
       ]
     }
