@@ -78,6 +78,21 @@ export const MANIFEST_FIELD_MIN_GLADYS_VERSION = {
   scene_triggers: '5.1.0',
   scene_actions: '5.1.0',
 };
+// Same gate for the properties of a config field added after the first
+// release: an older core rejects a field carrying an unknown property with
+// "unknown field". `credential_keys`: the off-schema keys an account field
+// declares, the only ones a disconnect deletes (contracts/manifest.md C.1).
+// TODO: set to the first Gladys release shipping GladysAssistant/Gladys#2719.
+export const CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION = {
+  credential_keys: '5.1.5',
+};
+// The service-scoped variables the Gladys core stores next to the config of
+// an integration: an account field may not declare them as credential_keys.
+export const CORE_SERVICE_VARIABLES = [
+  'EXTERNAL_INTEGRATION_CONTAINER_PORTS',
+  'EXTERNAL_INTEGRATION_CONTAINERS_DESIRED',
+  'EXTERNAL_INTEGRATION_CONTAINERS_ENV',
+];
 // Same gate for the `type` values added after the first release: an older
 // core rejects an unknown type with "must be one of device, communication…".
 export const MANIFEST_TYPE_MIN_GLADYS_VERSION = {

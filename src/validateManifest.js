@@ -6,6 +6,8 @@ import semver from 'semver';
 
 import {
   CAPABILITY_MANIFEST_FIELDS,
+  CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION,
+  CORE_SERVICE_VARIABLES,
   MANIFEST_FIELD_MIN_GLADYS_VERSION,
   MANIFEST_TYPE_MIN_GLADYS_VERSION,
   SUPPORTED_MANIFEST_VERSION,
@@ -182,6 +184,39 @@ function validateConfigSchemaRules(configSchema, basePath, context) {
     if (field.type === 'section') {
       errors.push(...validateSectionPortPlaceholders(field, path, context));
     }
+  });
+  errors.push(...validateCredentialKeysRules(configSchema, basePath));
+  return errors;
+}
+
+/**
+ * Rules of the `credential_keys` of the account fields the schema cannot
+ * express: a key stored next to the user preferences or the core's own
+ * variables, a key the user fills in the form (a setting, never a
+ * credential) and a key owned by two account fields (one disconnect would
+ * log the other account out) are refused.
+ * @param {object[]} configSchema - Flat list of config fields.
+ * @param {string} basePath - Dotted path of the list, for error messages.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateCredentialKeysRules(configSchema, basePath) {
+  const errors = [];
+  const schemaKeys = configSchema.map((field) => field.key);
+  const owners = new Map();
+  configSchema.forEach((field, i) => {
+    (field.credential_keys ?? []).forEach((key, keyIndex) => {
+      const path = `${basePath}.${i}.credential_keys.${keyIndex}`;
+      const storedName = key.toUpperCase();
+      if (storedName.startsWith('GLADYS_') || CORE_SERVICE_VARIABLES.includes(storedName)) {
+        errors.push(`${path}: "${key}" is reserved`);
+      } else if (schemaKeys.includes(key)) {
+        errors.push(`${path}: "${key}" is a config_schema key`);
+      } else if (owners.has(key)) {
+        errors.push(`${path}: "${key}" is already a credential key of ${owners.get(key)}`);
+      } else {
+        owners.set(key, field.key);
+      }
+    });
   });
   return errors;
 }
@@ -415,6 +450,15 @@ function validateGladysVersionGates(manifest) {
       errors.push(
         `manifest.gladys_version: declaring ${field} requires ">=${fieldMinimum}" at minimum` +
           ` (older Gladys releases reject manifests carrying unknown fields)`,
+      );
+    }
+  });
+  Object.entries(CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION).forEach(([property, propertyMinimum]) => {
+    const declared = (manifest.config_schema ?? []).some((field) => field[property] !== undefined);
+    if (declared && !satisfies(propertyMinimum)) {
+      errors.push(
+        `manifest.gladys_version: declaring ${property} on a config_schema field requires ` +
+          `">=${propertyMinimum}" at minimum (older Gladys releases reject config fields carrying unknown properties)`,
       );
     }
   });
