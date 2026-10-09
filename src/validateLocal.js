@@ -25,13 +25,25 @@ import { validateManifest } from './validateManifest.js';
  * failure: a local run reports everything at once so the developer fixes it
  * all in one pass. What only exists once published (public repo, store topic,
  * manifest at the root of the default branch) is out of scope.
+ *
+ * The registry check can be skipped (e.g. in the CI of a pull request, where
+ * the image tag of the bumped manifest is only pushed by the release): each
+ * image reference then gets a warning instead, so a skipped check never
+ * passes for a verified one. The reference format itself is still validated
+ * with the manifest.
  * @param {object} options - Options.
  * @param {string} options.manifestPath - Path of the local gladys-assistant-integration.json.
  * @param {Function} options.checkDockerImage - Docker image existence checker (injectable for tests).
  * @param {Function} options.downloadCover - Cover downloader (injectable for tests).
+ * @param {boolean} [options.skipImageCheck] - Skip the registry check of the Docker images.
  * @returns {Promise<{problems: {level: string, reason: string}[]}>} Problems, empty when the integration would be indexed cleanly.
  */
-export async function validateLocalIntegration({ manifestPath, checkDockerImage, downloadCover }) {
+export async function validateLocalIntegration({
+  manifestPath,
+  checkDockerImage,
+  downloadCover,
+  skipImageCheck = false,
+}) {
   const problems = [];
   const error = (reason) => problems.push({ level: REJECTION_LEVELS.ERROR, reason });
   const warning = (reason) => problems.push({ level: REJECTION_LEVELS.WARNING, reason });
@@ -108,6 +120,10 @@ export async function validateLocalIntegration({ manifestPath, checkDockerImage,
     })),
   ];
   for (const { path, reference } of imageReferences) {
+    if (skipImageCheck) {
+      warning(`${path}: registry check skipped — not verified that the image exists and is anonymously pullable`);
+      continue;
+    }
     const imageCheck = await checkDockerImage({ reference });
     if (imageCheck.status === 'error') {
       error(`${path}: ${imageCheck.reason}`);

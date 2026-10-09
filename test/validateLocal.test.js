@@ -242,6 +242,47 @@ describe('validateLocalIntegration', () => {
     ]);
   });
 
+  it('should skip the registry check of every image with a warning when asked to', async () => {
+    const manifestPath = await writeManifestFile(JSON.stringify(manifest()));
+    let imageChecks = 0;
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: async () => {
+        imageChecks += 1;
+        return { status: 'error', reason: 'image not found on registry "ghcr.io" (HTTP 404)' };
+      },
+      downloadCover: workingCover,
+      skipImageCheck: true,
+    });
+    expect(imageChecks).to.equal(0);
+    expect(problems).to.deep.equal([
+      {
+        level: 'warning',
+        reason: 'docker_image: registry check skipped — not verified that the image exists and is anonymously pullable',
+      },
+      {
+        level: 'warning',
+        reason:
+          'containers.0.docker_image: registry check skipped — not verified that the image exists and is anonymously pullable',
+      },
+    ]);
+  });
+
+  it('should still run the other checks when the registry check is skipped', async () => {
+    const manifestPath = await writeManifestFile(JSON.stringify(manifest()), { en: DOC_CONTENT, fr: undefined });
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: fakeCoverDownloader(),
+      skipImageCheck: true,
+    });
+    expect(problems.map((problem) => problem.reason)).to.include.members([
+      'docs/fr.md: file not found — user documentation is mandatory',
+      'cover_image: download failed (HTTP 404) — the placeholder cover would be used',
+    ]);
+    expect(problems.filter((problem) => problem.level === 'error')).to.have.lengthOf(1);
+  });
+
   it('should report a warning when the cover_image is missing', async () => {
     const withoutCover = manifest();
     delete withoutCover.cover_image;

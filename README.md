@@ -65,6 +65,18 @@ The exit code is `0` when the integration would be indexed and `1` when it would
 
 What a local run cannot verify: that the repository is public, tagged with the `gladys-assistant-integration` topic, and that the manifest is pushed at the root of the default branch.
 
+### In the CI of your pull requests
+
+A pull request that bumps `version` and `docker_image` references an image tag that the release has not pushed yet, and the very first image of a new integration does not exist until its first release: the registry check would fail on every such pull request. Skip it there with `--skip-image-check`:
+
+```bash
+npx github:GladysAssistant/integration-store --skip-image-check
+```
+
+Every other check still runs (schema and code rules, docs, cover, categories) and the image reference format is still validated; each skipped image is reported as a warning, so the run never claims a verification it did not do. With the flag, exit code `0` means every other check passes: the integration would be indexed only once its images are published.
+
+The indexer itself always checks the images and rejects an integration whose image is missing — it is then dropped from the catalog until the next indexing. So publish the images **before** the manifest that references them reaches the default branch, and run the validator once more **without** the flag once they are published (e.g. as the last step of your release workflow).
+
 ## The manifest
 
 The canonical JSON Schema lives in [`schemas/manifest.schema.json`](schemas/manifest.schema.json) and is published next to the index at `<STORE_BASE_URL>/manifest.schema.json`. Full example:
