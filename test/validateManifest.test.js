@@ -1310,7 +1310,7 @@ describe('validateManifest', () => {
         valid: false,
         errors: [
           'manifest.type: a provider integration must declare at least one capability field' +
-            ' (widgets, scene_triggers, scene_actions)',
+            ' (widgets, scene_triggers, scene_actions, energy_contracts)',
         ],
       });
     });
@@ -1324,7 +1324,7 @@ describe('validateManifest', () => {
       expect(validateManifest(manifest).errors).to.deep.equal([
         'manifest.name: must NOT have fewer than 3 characters',
         'manifest.type: a provider integration must declare at least one capability field' +
-          ' (widgets, scene_triggers, scene_actions)',
+          ' (widgets, scene_triggers, scene_actions, energy_contracts)',
       ]);
     });
 
@@ -1742,6 +1742,491 @@ describe('validateManifest', () => {
           ]);
         });
       });
+    });
+  });
+
+  describe('calendar type and account_schema', () => {
+    const calendarManifest = JSON.parse(
+      readFileSync(new URL('./fixtures/calendar-manifest.json', import.meta.url), 'utf8'),
+    );
+    const buildCalendarManifest = () => structuredClone(calendarManifest);
+
+    it('should accept the reference calendar manifest (account_schema, gladys_version >= 5.2.0)', () => {
+      expect(validateManifest(buildCalendarManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept a calendar integration without account_schema (a public feed)', () => {
+      const manifest = buildCalendarManifest();
+      delete manifest.account_schema;
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject account_schema on every other type, with the explicit rule', () => {
+      const otherTypes = {
+        device: {},
+        communication: { messaging: { receive: true } },
+        weather: {},
+        provider: { widgets: [{ key: 'releases', label: { en: 'Releases' } }] },
+      };
+      Object.entries(otherTypes).forEach(([type, fields]) => {
+        const manifest = { ...buildCalendarManifest(), type, ...fields };
+        expect(validateManifest(manifest), type).to.deep.equal({
+          valid: false,
+          errors: ['manifest.account_schema: only allowed on calendar integrations'],
+        });
+      });
+    });
+
+    it('should keep the other schema errors next to the account_schema rule', () => {
+      const manifest = buildCalendarManifest();
+      manifest.type = 'device';
+      manifest.name = 'ab';
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.name: must NOT have fewer than 3 characters',
+        'manifest.account_schema: only allowed on calendar integrations',
+      ]);
+    });
+
+    it('should reject an empty account_schema', () => {
+      const manifest = buildCalendarManifest();
+      manifest.account_schema = [];
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.account_schema');
+    });
+
+    it('should apply the config field rules to the account_schema', () => {
+      const manifest = buildCalendarManifest();
+      manifest.account_schema.push({ key: 'server_url', type: 'string', label: { en: 'Again' } });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.account_schema.5.key: duplicate key "server_url"',
+      ]);
+    });
+
+    it('should reject oauth2 and account_link fields in the account_schema', () => {
+      ['oauth2', 'account_link'].forEach((type) => {
+        const manifest = buildCalendarManifest();
+        manifest.account_schema.push({ key: 'account', type, label: { en: 'Account' } });
+        const result = validateManifest(manifest);
+        expect(result.valid).to.equal(false);
+        expect(result.errors.join(' ')).to.include('manifest.account_schema.5.type');
+      });
+    });
+
+    it('should reject a {{port:<name>}} placeholder in an account_schema section, declared or not', () => {
+      const manifest = buildCalendarManifest();
+      manifest.containers = [
+        {
+          name: 'caldav',
+          docker_image: 'nextcloud:30',
+          ports: [{ container_port: 80, name: 'web', label: { en: 'Web UI' } }],
+        },
+      ];
+      manifest.account_schema[0].description = { en: 'Open http://{{gladys_host}}:{{port:web}} or {{port:other}}' };
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.account_schema.0.description.en: {{port:web}} is not available in the per-user account schema',
+        'manifest.account_schema.0.description.en: {{port:other}} is not available in the per-user account schema',
+      ]);
+    });
+
+    it('should reject type "calendar" and account_schema on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildCalendarManifest();
+      manifest.gladys_version = '>=5.1.0';
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.gladys_version: type "calendar" requires ">=5.2.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying an unknown type)',
+          'manifest.gladys_version: declaring account_schema requires ">=5.2.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+        ],
+      });
+    });
+
+    it('should reject messaging and contact_schema on a calendar integration', () => {
+      const manifest = buildCalendarManifest();
+      manifest.messaging = { receive: false };
+      manifest.contact_schema = [{ key: 'token', type: 'secret', label: { en: 'Token' } }];
+      expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('houses dynamic source', () => {
+    const houseField = { key: 'house', type: 'select', source: 'houses', label: { en: 'House' } };
+
+    it('should accept select and multi_select fields with the "houses" source in every form', () => {
+      const manifest = buildProviderManifest();
+      manifest.gladys_version = '>=5.2.0';
+      manifest.config_schema.push(houseField);
+      manifest.actions = [
+        { key: 'sync_houses', label: { en: 'Sync houses' }, fields: [{ ...houseField, type: 'multi_select' }] },
+        { key: 'ping', label: { en: 'Ping' } },
+      ];
+      manifest.widgets[1].settings.push(houseField);
+      manifest.widgets.push({ key: 'bare', label: { en: 'Bare widget' } });
+      manifest.scene_triggers[0].fields.push(houseField);
+      manifest.scene_actions[0].fields.push(houseField);
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept the "houses" source in a contact_schema', () => {
+      const manifest = buildManifest();
+      manifest.type = 'communication';
+      manifest.gladys_version = '>=5.2.0';
+      manifest.messaging = { receive: false };
+      manifest.contact_schema = [{ key: 'token', type: 'secret', label: { en: 'Token' } }, houseField];
+      delete manifest.actions;
+      delete manifest.widgets;
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a default on a "houses" select', () => {
+      const manifest = buildProviderManifest();
+      manifest.gladys_version = '>=5.2.0';
+      manifest.config_schema.push({ ...houseField, default: 'main-house' });
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.config_schema.1.default: not allowed with a dynamic source',
+      ]);
+    });
+
+    it('should reject the "houses" source on a gladys_version range older Gladys releases satisfy, wherever it sits', () => {
+      const gate =
+        'manifest.gladys_version: declaring source "houses" requires ">=5.2.0" at minimum' +
+        ' (older Gladys releases reject a dynamic source they do not know)';
+      const placements = {
+        config_schema: (manifest) => manifest.config_schema.push(houseField),
+        'action fields': (manifest) => {
+          manifest.actions = [{ key: 'sync', label: { en: 'Sync' }, fields: [houseField] }];
+        },
+        'widget settings': (manifest) => manifest.widgets[1].settings.push(houseField),
+        'scene trigger fields': (manifest) => manifest.scene_triggers[0].fields.push(houseField),
+        'scene action fields': (manifest) => manifest.scene_actions[0].fields.push(houseField),
+      };
+      Object.entries(placements).forEach(([placement, place]) => {
+        const manifest = buildProviderManifest();
+        place(manifest);
+        expect(validateManifest(manifest), placement).to.deep.equal({ valid: false, errors: [gate] });
+      });
+
+      const calendar = JSON.parse(readFileSync(new URL('./fixtures/calendar-manifest.json', import.meta.url), 'utf8'));
+      calendar.gladys_version = '>=5.1.0';
+      calendar.account_schema.push(houseField);
+      expect(validateManifest(calendar).errors).to.include(gate);
+    });
+
+    it('should accept an old gladys_version range when only the "devices" source is used', () => {
+      expect(validateManifest(buildManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+  });
+
+  describe('energy_contracts', () => {
+    const energyManifest = JSON.parse(
+      readFileSync(new URL('./fixtures/energy-manifest.json', import.meta.url), 'utf8'),
+    );
+    const buildEnergyManifest = () => structuredClone(energyManifest);
+    const withEnergy = (energyContracts) => {
+      const manifest = buildEnergyManifest();
+      manifest.energy_contracts = energyContracts;
+      return manifest;
+    };
+    const [ECONOMY_7, AGILE, FLAT_RATE] = energyManifest.energy_contracts.templates;
+    const [AGILE_CALENDAR, SPOT_CALENDAR] = energyManifest.energy_contracts.calendars;
+    const withTemplate = (template) => withEnergy({ templates: [template], calendars: [AGILE_CALENDAR] });
+    const expectErrors = (manifest, errors) =>
+      expect(validateManifest(manifest)).to.deep.equal({ valid: false, errors });
+    const expectSchemaError = (manifest, path) => {
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include(path);
+    };
+
+    it('should accept the reference energy manifest (templates, calendars, source "houses")', () => {
+      expect(validateManifest(buildEnergyManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept the capability on every type, and a provider made of it alone', () => {
+      ['device', 'weather'].forEach((type) => {
+        const manifest = buildEnergyManifest();
+        manifest.type = type;
+        expect(validateManifest(manifest), type).to.deep.equal({ valid: true, errors: [] });
+      });
+      expect(validateManifest(withEnergy({ calendars: [AGILE_CALENDAR] }))).to.deep.equal({ valid: true, errors: [] });
+      expect(validateManifest(withEnergy({ templates: [FLAT_RATE] }))).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject energy_contracts on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildEnergyManifest();
+      manifest.gladys_version = '>=5.1.0';
+      manifest.config_schema.pop();
+      expectErrors(manifest, [
+        'manifest.gladys_version: declaring energy_contracts requires ">=5.2.0" at minimum' +
+          ' (older Gladys releases reject manifests carrying unknown fields)',
+      ]);
+    });
+
+    it('should reject a malformed field, with the explicit templates-or-calendars rule', () => {
+      expectErrors(withEnergy({}), ['manifest.energy_contracts: must declare templates or calendars']);
+      expectErrors(withEnergy({ nope: 1 }), [
+        'manifest.energy_contracts: must NOT have additional properties',
+        'manifest.energy_contracts: must declare templates or calendars',
+      ]);
+      expectSchemaError(withEnergy('x'), 'manifest.energy_contracts: must be object');
+      expectSchemaError(
+        withEnergy({ templates: [] }),
+        'manifest.energy_contracts.templates: must NOT have fewer than 1',
+      );
+      expectSchemaError(
+        withEnergy({ templates: new Array(21).fill(FLAT_RATE) }),
+        'manifest.energy_contracts.templates: must NOT have more than 20',
+      );
+      expectSchemaError(
+        withEnergy({ calendars: new Array(11).fill(AGILE_CALENDAR) }),
+        'manifest.energy_contracts.calendars: must NOT have more than 10',
+      );
+      expectSchemaError(withEnergy({ calendars: [{ key: 'Bad' }] }), 'manifest.energy_contracts.calendars.0.key');
+      expectSchemaError(
+        withEnergy({ calendars: [{ key: 'spot-fi', granularity: 'five_minutes' }] }),
+        'manifest.energy_contracts.calendars.0.granularity',
+      );
+      expectSchemaError(
+        withEnergy({ calendars: [{ key: 'spot-fi', day_starts_at: '24:00' }] }),
+        'manifest.energy_contracts.calendars.0.day_starts_at',
+      );
+      expectSchemaError(
+        withEnergy({ calendars: [{ key: 'spot-fi', values: ['a', 'a'] }] }),
+        'manifest.energy_contracts.calendars.0.values',
+      );
+      expectSchemaError(
+        withEnergy({ calendars: [{ key: 'spot-fi', currency: 'eur' }] }),
+        'manifest.energy_contracts.calendars.0.currency',
+      );
+    });
+
+    it('should apply the calendar code rules: unique keys, known timezones', () => {
+      expectErrors(withEnergy({ calendars: [AGILE_CALENDAR, { ...SPOT_CALENDAR, key: 'agile-gb' }] }), [
+        'manifest.energy_contracts.calendars.1.key: duplicate key "agile-gb"',
+      ]);
+      expectErrors(
+        withEnergy({ calendars: [{ key: 'spot-fi', granularity: 'fifteen_minutes', timezone: 'Mars/Olympus' }] }),
+        ['manifest.energy_contracts.calendars.0.timezone: must be a known IANA timezone'],
+      );
+      expect(
+        validateManifest(
+          withEnergy({
+            calendars: [
+              { key: 'spot-fi', granularity: 'fifteen_minutes', timezone: 'Europe/Helsinki', currency: 'EUR' },
+            ],
+          }),
+        ),
+      ).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a malformed template through the schema', () => {
+      expectSchemaError(withTemplate(null), 'manifest.energy_contracts.templates.0: must be object');
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, extra: 1 }),
+        'manifest.energy_contracts.templates.0: must NOT have',
+      );
+      expectSchemaError(withTemplate({ ...ECONOMY_7, key: 'Bad Key' }), 'manifest.energy_contracts.templates.0.key');
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, name: 'Economy 7' }),
+        'manifest.energy_contracts.templates.0.name',
+      );
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, name: { en: 'x'.repeat(65) } }),
+        'manifest.energy_contracts.templates.0.name.en',
+      );
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, description: { en: '' } }),
+        'manifest.energy_contracts.templates.0.description.en',
+      );
+      expectSchemaError(withTemplate({ ...ECONOMY_7, country: 'gb' }), 'manifest.energy_contracts.templates.0.country');
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, currency: 'pounds' }),
+        'manifest.energy_contracts.templates.0.currency',
+      );
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, pricing_mode: 'magic' }),
+        'manifest.energy_contracts.templates.0.pricing_mode',
+      );
+      expectSchemaError(withTemplate({ ...ECONOMY_7, version: '' }), 'manifest.energy_contracts.templates.0.version');
+      expectSchemaError(
+        withTemplate({ ...ECONOMY_7, calendars: ['Bad'] }),
+        'manifest.energy_contracts.templates.0.calendars.0',
+      );
+      expectSchemaError(withTemplate({ ...ECONOMY_7, inputs: 'x' }), 'manifest.energy_contracts.templates.0.inputs');
+      const { tariff, ...withoutTariff } = ECONOMY_7;
+      expect(tariff).to.be.an('object');
+      expectErrors(withTemplate(withoutTariff), [
+        "manifest.energy_contracts.templates.0: must have required property 'tariff'",
+      ]);
+      expectSchemaError(withTemplate({ ...ECONOMY_7, tariff: 'x' }), 'manifest.energy_contracts.templates.0.tariff');
+    });
+
+    it('should apply the template code rules: unique keys, known timezone', () => {
+      expectErrors(withEnergy({ templates: [FLAT_RATE, FLAT_RATE] }), [
+        'manifest.energy_contracts.templates.1.key: duplicate key "flat-rate"',
+      ]);
+      expectErrors(withTemplate({ ...ECONOMY_7, timezone: 'Mars/Olympus' }), [
+        'manifest.energy_contracts.templates.0.timezone: must be a known IANA timezone',
+      ]);
+    });
+
+    it('should reject a malformed input', () => {
+      const withInput = (input) => withTemplate({ ...ECONOMY_7, inputs: [...ECONOMY_7.inputs, input] });
+      const inputPath = 'manifest.energy_contracts.templates.0.inputs.4';
+      expectSchemaError(withInput(null), `${inputPath}: must be object`);
+      expectSchemaError(withInput({ key: 'x', type: 'number', extra: 1 }), `${inputPath}: must NOT have`);
+      expectSchemaError(withInput({ key: 'Bad-Key', type: 'number' }), `${inputPath}.key`);
+      expectSchemaError(withInput({ key: 'x', type: 'secret' }), `${inputPath}.type`);
+      expectSchemaError(withInput({ key: 'x', type: 'number', label: 'x' }), `${inputPath}.label`);
+      expectSchemaError(
+        withInput({ key: 'x', type: 'number', description: { en: '' } }),
+        `${inputPath}.description.en`,
+      );
+      expectSchemaError(withInput({ key: 'x', type: 'number', unit: '' }), `${inputPath}.unit`);
+      expectSchemaError(withInput({ key: 'x', type: 'number', required: 'yes' }), `${inputPath}.required`);
+      expectSchemaError(withInput({ key: 'x', type: 'select', options: [] }), `${inputPath}.options`);
+      expectSchemaError(withInput({ key: 'x', type: 'select', options: [true] }), `${inputPath}.options.0`);
+      expectErrors(withInput({ key: 'region', type: 'number' }), [`${inputPath}.key: duplicate key "region"`]);
+      expectErrors(withInput({ key: 'x', type: 'select' }), [
+        `${inputPath}.options: a select input needs 1-64 string or number options`,
+      ]);
+      expectErrors(withInput({ key: 'x', type: 'select', options: ['a'], default: 'b' }), [
+        `${inputPath}.default: must be one of the options`,
+      ]);
+      expectErrors(withInput({ key: 'x', type: 'number', options: ['a'] }), [
+        `${inputPath}.options: only a select input has options`,
+      ]);
+      expectErrors(withInput({ key: 'x', type: 'number', default: 'a' }), [
+        `${inputPath}.default: must be a finite number`,
+      ]);
+      expectErrors(withInput({ key: 'x', type: 'string', default: 1 }), [`${inputPath}.default: must be a string`]);
+      expectErrors(withInput({ key: 'x', type: 'time_intervals', default: 'night' }), [
+        `${inputPath}.default: must be a list of [start, end] time intervals`,
+      ]);
+      expectErrors(withInput({ key: 'x', type: 'time_intervals', default: [['22:00'], '06:00'] }), [
+        `${inputPath}.default: must be a list of [start, end] time intervals`,
+      ]);
+      const valid = withInput({ key: 'x', type: 'select', options: [1, 2], default: 2, required: true, unit: 'kVA' });
+      expect(validateManifest(valid)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should substitute the declared defaults, the first select option or a sample into the tariff', () => {
+      // an input without default gets a sample of its type: the tariff still validates
+      const withoutDefaults = {
+        ...ECONOMY_7,
+        inputs: ECONOMY_7.inputs.map(({ default: _default, ...input }) => input),
+      };
+      expect(validateManifest(withTemplate(withoutDefaults))).to.deep.equal({ valid: true, errors: [] });
+      // a numeric select without default is sampled with its first option, feeding an amount here
+      const numericSelect = {
+        ...ECONOMY_7,
+        inputs: [...ECONOMY_7.inputs, { key: 'power', type: 'select', options: [6, 9, 12] }],
+        tariff: {
+          ...ECONOMY_7.tariff,
+          components: [
+            ...ECONOMY_7.tariff.components,
+            { key: 'power', kind: 'fixed', amount: '{{input:power}}', per: 'month', label: '{{input:power}} kVA' },
+          ],
+        },
+      };
+      expect(validateManifest(withTemplate(numericSelect))).to.deep.equal({ valid: true, errors: [] });
+      // a placeholder naming no declared input is an error
+      expectErrors(withTemplate({ ...ECONOMY_7, inputs: [] }), [
+        'manifest.energy_contracts.templates.0.tariff: missing input "off_peak_slots"',
+        'manifest.energy_contracts.templates.0.tariff: missing input "night_price"',
+      ]);
+      expectErrors(
+        withTemplate({
+          ...FLAT_RATE,
+          tariff: {
+            ...FLAT_RATE.tariff,
+            components: [{ key: 'e', kind: 'consumption', fallback: { label: 'x {{input:nope}}', price: 1 } }],
+          },
+        }),
+        ['manifest.energy_contracts.templates.0.tariff: missing input "nope"'],
+      );
+    });
+
+    it('should validate the tariff of a template against the tariff schema and its semantic rules', () => {
+      expectErrors(
+        withTemplate({
+          ...FLAT_RATE,
+          tariff: { tariff_version: 1, components: [{ key: 'e', kind: 'consumption', fallback: { price: -1 } }] },
+        }),
+        ['manifest.energy_contracts.templates.0.tariff.components.0.fallback.price: must be >= 0'],
+      );
+      expectErrors(
+        withTemplate({
+          ...FLAT_RATE,
+          tariff: {
+            tariff_version: 1,
+            components: [
+              { key: 'e', kind: 'consumption', rules: [{ when: { time: [['22:00', '06:00']] }, price: 0.1 }] },
+            ],
+          },
+        }),
+        [
+          'manifest.energy_contracts.templates.0.tariff.components.0:' +
+            ' a consumption component needs a fallback or a last rule without "when"',
+        ],
+      );
+    });
+
+    it('should require a component in rules mode and only fixed components in delegated mode', () => {
+      expectErrors(withTemplate({ ...FLAT_RATE, tariff: { tariff_version: 1, components: [] } }), [
+        'manifest.energy_contracts.templates.0.tariff.components: at least one component is required in rules mode',
+      ]);
+      const { tariff, ...agileWithoutTariff } = AGILE;
+      expect(tariff).to.be.an('object');
+      expect(validateManifest(withTemplate(agileWithoutTariff))).to.deep.equal({ valid: true, errors: [] });
+      expect(validateManifest(withTemplate({ ...AGILE, tariff: { tariff_version: 1, components: [] } }))).to.deep.equal(
+        {
+          valid: true,
+          errors: [],
+        },
+      );
+      expectErrors(
+        withTemplate({
+          ...AGILE,
+          tariff: {
+            tariff_version: 1,
+            components: [
+              { key: 'standing', kind: 'fixed', amount: 0.5, per: 'day' },
+              { key: 'energy', kind: 'consumption', fallback: { price: 0.2 } },
+            ],
+          },
+        }),
+        [
+          'manifest.energy_contracts.templates.0.tariff.components.1.kind:' +
+            ' a delegated template only carries fixed components (found "consumption")',
+        ],
+      );
+    });
+
+    it('should require every calendar the tariff reads to be listed in the template calendars', () => {
+      const { calendars, ...withoutCalendars } = ECONOMY_7;
+      expect(calendars).to.deep.equal(['agile-gb']);
+      expectErrors(withTemplate(withoutCalendars), [
+        'manifest.energy_contracts.templates.0.calendars:' +
+          ' the tariff references calendar "agile-gb", list it in the template calendars',
+      ]);
+      expectErrors(withTemplate({ ...ECONOMY_7, calendars: ['spot-gb'] }), [
+        'manifest.energy_contracts.templates.0.calendars:' +
+          ' the tariff references calendar "agile-gb", list it in the template calendars',
+      ]);
+      // a calendar fed by another integration or by the catalogue is a valid reference
+      expect(validateManifest(withEnergy({ templates: [ECONOMY_7] }))).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should not check the tariff while its inputs are unsound', () => {
+      const manifest = withTemplate({
+        ...ECONOMY_7,
+        inputs: [...ECONOMY_7.inputs, { key: 'region', type: 'number' }],
+        tariff: { tariff_version: 1, components: [] },
+      });
+      expectErrors(manifest, ['manifest.energy_contracts.templates.0.inputs.4.key: duplicate key "region"']);
     });
   });
 });
