@@ -26,6 +26,13 @@ export const MANIFEST_MAX_BYTES = 100 * 1024;
 // least DOCS_MIN_CHARS characters, otherwise the integration is rejected; they
 // are re-hosted next to the covers and referenced by the index (`docs` URLs).
 export const DOCS_LANGUAGES = ['en', 'fr'];
+// Optional user documentation: the other languages of the Gladys UI. A
+// docs/<lang>.md present in the repository is re-hosted and referenced by the
+// index exactly like the mandatory ones (Gladys serves the user's language
+// when the index carries it, English otherwise); an absent file is simply not
+// indexed, a present but too small or undownloadable one is skipped with a
+// warning — never a rejection.
+export const DOCS_OPTIONAL_LANGUAGES = ['de', 'es'];
 export const DOCS_MIN_CHARS = 300;
 // A documentation file is markdown text (images stay in the repo and are
 // linked, not embedded); anything bigger than this is not a doc page.

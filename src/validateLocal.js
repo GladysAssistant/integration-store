@@ -5,6 +5,7 @@ import { splitKnownCategories } from './categories.js';
 import {
   DOCS_LANGUAGES,
   DOCS_MIN_CHARS,
+  DOCS_OPTIONAL_LANGUAGES,
   INTEGRATION_CATALOG_CATEGORIES,
   REJECTION_LEVELS,
   docsFilePath,
@@ -15,7 +16,8 @@ import { validateManifest } from './validateManifest.js';
 /**
  * Run, against a local manifest file, the same admission checks the hourly
  * indexer applies to a published repository: JSON parsing, JSON Schema + code
- * rules, mandatory user documentation (docs/en.md + docs/fr.md), Docker image
+ * rules, mandatory user documentation (docs/en.md + docs/fr.md, plus the
+ * optional languages when present), Docker image
  * existence on the registry (main and sub-containers),
  * cover contract. Problems carry the same error/warning levels as
  * rejected.json: an error means the integration would be rejected, a warning
@@ -109,6 +111,23 @@ export async function validateLocalIntegration({
     }
     if (content.trim().length < DOCS_MIN_CHARS) {
       error(`${path}: must hold at least ${DOCS_MIN_CHARS} characters of user documentation`);
+    }
+  }
+  // Optional languages: an absent file is simply not indexed, a present but
+  // too small one would be skipped by the indexer with a warning.
+  for (const lang of DOCS_OPTIONAL_LANGUAGES) {
+    const path = docsFilePath(lang);
+    let content;
+    try {
+      content = await readFile(join(dirname(manifestPath), ...path.split('/')), 'utf8');
+    } catch {
+      continue;
+    }
+    if (content.trim().length < DOCS_MIN_CHARS) {
+      warning(
+        `${path}: must hold at least ${DOCS_MIN_CHARS} characters of user documentation` +
+          ` — the indexer would index without the ${lang} documentation`,
+      );
     }
   }
 

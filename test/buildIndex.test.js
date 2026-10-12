@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { expect } from 'chai';
 
 import { buildIndex } from '../src/buildIndex.js';
-import { COVER_HEIGHT, COVER_WIDTH } from '../src/constants.js';
+import { COVER_HEIGHT, COVER_WIDTH, DOCS_LANGUAGES } from '../src/constants.js';
 import { createSolidPng, makeFakeJpeg } from './helpers/images.js';
 
 const NOW = '2026-07-13T08:00:00.000Z';
@@ -68,7 +68,9 @@ const DOC_CONTENT = `# Demo integration\n\n${'Install the integration, configure
  * @returns {Function} fetchDocFile-compatible function.
  */
 function fakeDocFetcher(responses = {}) {
-  return async ({ owner, repo, lang }) => responses[`${owner}/${repo}/${lang}`] ?? { status: 'ok', raw: DOC_CONTENT };
+  return async ({ owner, repo, lang }) =>
+    responses[`${owner}/${repo}/${lang}`] ??
+    (DOCS_LANGUAGES.includes(lang) ? { status: 'ok', raw: DOC_CONTENT } : { status: 'not_found' });
 }
 
 /**
@@ -146,6 +148,77 @@ describe('buildIndex', () => {
         store_slug: 'nora/no-docs',
         level: 'error',
         reason: 'docs/fr.md: file not found — user documentation is mandatory',
+        checked_at: NOW,
+      },
+    ]);
+  });
+
+  it('should index the optional documentation languages when present', async () => {
+    const goodManifest = manifest();
+    const { index, rejected, docsFiles } = await buildIndex({
+      repositories: [repository('nora', 'polyglot')],
+      fetchManifestFile: fakeManifestFetcher({ 'nora/polyglot': { status: 'ok', raw: JSON.stringify(goodManifest) } }),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher({
+        'nora/polyglot/de': { status: 'ok', raw: `${DOC_CONTENT} (de)` },
+        'nora/polyglot/es': { status: 'ok', raw: `${DOC_CONTENT} (es)` },
+      }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(rejected.filter((entry) => entry.reason.startsWith('docs/'))).to.deep.equal([]);
+    expect(index.integrations[0].docs).to.deep.equal({
+      en: `${STORE_BASE_URL}/docs/nora--polyglot/en.md`,
+      fr: `${STORE_BASE_URL}/docs/nora--polyglot/fr.md`,
+      de: `${STORE_BASE_URL}/docs/nora--polyglot/de.md`,
+      es: `${STORE_BASE_URL}/docs/nora--polyglot/es.md`,
+    });
+    expect(docsFiles).to.deep.equal([
+      { fileName: 'nora--polyglot/en.md', data: Buffer.from(DOC_CONTENT, 'utf8') },
+      { fileName: 'nora--polyglot/fr.md', data: Buffer.from(DOC_CONTENT, 'utf8') },
+      { fileName: 'nora--polyglot/de.md', data: Buffer.from(`${DOC_CONTENT} (de)`, 'utf8') },
+      { fileName: 'nora--polyglot/es.md', data: Buffer.from(`${DOC_CONTENT} (es)`, 'utf8') },
+    ]);
+  });
+
+  it('should skip an optional documentation language that is too short or fails to download, with a warning', async () => {
+    const goodManifest = manifest();
+    const { index, rejected, docsFiles } = await buildIndex({
+      repositories: [repository('nora', 'half-polyglot')],
+      fetchManifestFile: fakeManifestFetcher({
+        'nora/half-polyglot': { status: 'ok', raw: JSON.stringify(goodManifest) },
+      }),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: fakeDocFetcher({
+        'nora/half-polyglot/de': { status: 'ok', raw: '  # TODO  ' },
+        'nora/half-polyglot/es': { status: 'error', reason: 'download failed (HTTP 500)' },
+      }),
+      downloadCover: fakeCoverDownloader(),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    });
+    expect(index.integrations).to.have.lengthOf(1);
+    expect(index.integrations[0].docs).to.deep.equal({
+      en: `${STORE_BASE_URL}/docs/nora--half-polyglot/en.md`,
+      fr: `${STORE_BASE_URL}/docs/nora--half-polyglot/fr.md`,
+    });
+    expect(docsFiles.map((file) => file.fileName)).to.deep.equal([
+      'nora--half-polyglot/en.md',
+      'nora--half-polyglot/fr.md',
+    ]);
+    expect(rejected.filter((entry) => entry.reason.startsWith('docs/'))).to.deep.equal([
+      {
+        store_slug: 'nora/half-polyglot',
+        level: 'warning',
+        reason:
+          'docs/de.md: must hold at least 300 characters of user documentation — indexed without the de documentation',
+        checked_at: NOW,
+      },
+      {
+        store_slug: 'nora/half-polyglot',
+        level: 'warning',
+        reason: 'docs/es.md: download failed (HTTP 500) — indexed without the es documentation',
         checked_at: NOW,
       },
     ]);

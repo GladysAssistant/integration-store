@@ -161,6 +161,46 @@ describe('validateLocalIntegration', () => {
     ]);
   });
 
+  it('should accept the optional documentation languages and warn when one is too short', async () => {
+    const polyglot = await writeManifestFile(JSON.stringify(manifest()), {
+      en: DOC_CONTENT,
+      fr: DOC_CONTENT,
+      de: DOC_CONTENT,
+      es: DOC_CONTENT,
+    });
+    expect(
+      (
+        await validateLocalIntegration({
+          manifestPath: polyglot,
+          checkDockerImage: fakeImageChecker(),
+          downloadCover: workingCover,
+        })
+      ).problems,
+    ).to.deep.equal([]);
+
+    const thin = await writeManifestFile(JSON.stringify(manifest()), {
+      en: DOC_CONTENT,
+      fr: DOC_CONTENT,
+      es: '  # TODO  ',
+    });
+    expect(
+      (
+        await validateLocalIntegration({
+          manifestPath: thin,
+          checkDockerImage: fakeImageChecker(),
+          downloadCover: workingCover,
+        })
+      ).problems,
+    ).to.deep.equal([
+      {
+        level: 'warning',
+        reason:
+          'docs/es.md: must hold at least 300 characters of user documentation' +
+          ' — the indexer would index without the es documentation',
+      },
+    ]);
+  });
+
   it('should report an error when the manifest file cannot be read', async () => {
     const { problems } = await validateLocalIntegration({
       manifestPath: '/nonexistent/gladys-assistant-integration.json',

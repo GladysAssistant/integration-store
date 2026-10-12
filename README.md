@@ -15,7 +15,8 @@ GitHub topic `gladys-assistant-integration`      (source of truth, distributed)
 │ 2. skip the ones listed in data/blocklist.json (fraud)       │
 │ 3. fetch gladys-assistant-integration.json from each repo    │
 │ 4. validate mechanically (JSON Schema + code rules)          │
-│ 5. check the mandatory user docs (docs/en.md + docs/fr.md)   │
+│ 5. check the user docs (docs/en.md + docs/fr.md mandatory,   │
+│    docs/de.md + docs/es.md optional)                         │
 │ 6. check the Docker image exists on its registry             │
 │ 7. download, validate and re-host each cover image           │
 │ 8. resolve the browse categories (manifest, else fallback    │
@@ -37,7 +38,7 @@ No account to create, no PR to get approved:
 
 1. Create a **public** GitHub repository for your integration (start from the [`integration-template-js`](https://github.com/GladysAssistant/integration-template-js) template).
 2. Put a valid **`gladys-assistant-integration.json`** manifest at the root of the default branch.
-3. Write the **mandatory user documentation**: `docs/en.md` **and** `docs/fr.md` (the two languages of the project; at least 300 characters each), following the template sections (Overview / Prerequisites / Configuration / Troubleshooting). Both files are re-hosted by the indexer and shown in the Gladys install and configuration screens.
+3. Write the **mandatory user documentation**: `docs/en.md` **and** `docs/fr.md` (the two languages of the project; at least 300 characters each), following the template sections (Overview / Prerequisites / Configuration / Troubleshooting). Both files are re-hosted by the indexer and shown in the Gladys install and configuration screens. A `docs/de.md` or `docs/es.md` (the other languages of the Gladys UI) is optional: when present and at least 300 characters long, it is re-hosted and shown to the users of that language the same way.
 4. Add the **`gladys-assistant-integration`** topic to the repository.
 5. Wait for the next hourly indexing: your integration appears in the catalog of every Gladys instance.
 6. Publish a new version = bump `version` and `docker_image` in the manifest and push. That's it.
@@ -58,7 +59,7 @@ It replays the validation of the indexer against your local `gladys-assistant-in
 
 - JSON Schema + code rules (same `validateManifest` code as the robot), including the `gladys_version` compatibility gates of the newer manifest fields and the tariff checks of the `energy_contracts` templates;
 - the browse categories (unknown keys the indexer would drop, and whether the integration would appear uncategorized in the catalog);
-- the mandatory user documentation (`docs/en.md` and `docs/fr.md` next to the manifest, at least 300 characters each);
+- the mandatory user documentation (`docs/en.md` and `docs/fr.md` next to the manifest, at least 300 characters each), and the optional `docs/de.md` / `docs/es.md` when present (too small: a warning, the indexer would skip the file);
 - the Docker images (main and sub-containers) exist on their registry and are anonymously pullable;
 - the cover contract (JPEG or PNG, exactly 800x534, ≤ 150 KB).
 
@@ -245,7 +246,7 @@ The `label` and `description` of a `section` field may embed two **plain-text pl
 
 The **Docker images are verified against their registry** (Docker Registry HTTP API v2, with an anonymous pull token when the registry asks for one — Docker Hub, GHCR, Quay and self-hosted registries all speak this protocol): a manifest whose image — main or sub-container — does not exist, or cannot be pulled anonymously, is rejected — a catalog entry must have images at the end. Only a definitive registry answer rejects; a transient failure (registry unreachable, 5xx) never evicts an integration that may already be published: it is indexed anyway with a `level: "warning"` entry in `rejected.json`. The check is a `HEAD` on the image manifest, so nothing is downloaded and it does not count against Docker Hub's pull rate limit.
 
-The **user documentation is mandatory**: `docs/en.md` and `docs/fr.md` at the root of the repository, at least 300 characters each — missing, empty or undownloadable files **reject** the integration (`level: "error"` in `rejected.json`). Valid files are **re-hosted** in the store bucket and referenced by the index (`docs` URLs, one per language), so Gladys can show them in the install and configuration screens without hitting third-party servers. The fine structure of the files (template sections) stays conventional.
+The **user documentation is mandatory**: `docs/en.md` and `docs/fr.md` at the root of the repository, at least 300 characters each — missing, empty or undownloadable files **reject** the integration (`level: "error"` in `rejected.json`). Valid files are **re-hosted** in the store bucket and referenced by the index (`docs` URLs, one per language), so Gladys can show them in the install and configuration screens without hitting third-party servers. The **other languages of the Gladys UI are optional**: a `docs/de.md` or `docs/es.md` present in the repository is re-hosted and referenced the same way (Gladys shows the user's language when the index carries it, English otherwise); an absent file is simply not indexed, and a present but too small or undownloadable one is skipped with a `level: "warning"` entry — never a rejection. The fine structure of the files (template sections) stays conventional.
 
 A missing or invalid **cover** never rejects an integration: it is indexed with a placeholder and a `level: "warning"` entry is published in `rejected.json`. Valid covers are **re-hosted** in the store bucket (no dead links in the catalog, no user IP leaked to third-party servers, guaranteed size and format).
 
@@ -280,7 +281,7 @@ Everything is uploaded to the R2 bucket and served over its public URL (`<STORE_
 | `widget-content.schema.json`        | canonical JSON Schema of the widget content vocabulary (what an integration returns for a declared dashboard widget)                                                                                                 |
 | `covers/<owner>--<repo>.<jpg\|png>` | re-hosted, validated cover images                                                                                                                                                                                    |
 | `covers/placeholder.png`            | cover used when an integration has none                                                                                                                                                                              |
-| `docs/<owner>--<repo>/<lang>.md`    | re-hosted mandatory user documentation (`en` and `fr`)                                                                                                                                                               |
+| `docs/<owner>--<repo>/<lang>.md`    | re-hosted user documentation: the mandatory `en` and `fr`, plus `de` and `es` when the repository provides them                                                                                                      |
 
 ## Moderation: the blocklist
 
