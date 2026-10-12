@@ -2220,6 +2220,18 @@ describe('validateManifest', () => {
       expect(validateManifest(withEnergy({ templates: [ECONOMY_7] }))).to.deep.equal({ valid: true, errors: [] });
     });
 
+    it('should report a template timezone error next to the tariff errors', () => {
+      const manifest = withTemplate({
+        ...FLAT_RATE,
+        timezone: 'Mars/Olympus',
+        tariff: { tariff_version: 1, components: [] },
+      });
+      expectErrors(manifest, [
+        'manifest.energy_contracts.templates.0.timezone: must be a known IANA timezone',
+        'manifest.energy_contracts.templates.0.tariff.components: at least one component is required in rules mode',
+      ]);
+    });
+
     it('should not check the tariff while its inputs are unsound', () => {
       const manifest = withTemplate({
         ...ECONOMY_7,

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { expect } from 'chai';
 
@@ -199,6 +199,22 @@ describe('validateLocalIntegration', () => {
           ' — the indexer would index without the es documentation',
       },
     ]);
+  });
+
+  it('should warn when an optional documentation file exists but cannot be read', async () => {
+    const manifestPath = await writeManifestFile(JSON.stringify(manifest()));
+    // a directory in place of the file: present, unreadable
+    await mkdir(join(dirname(manifestPath), 'docs', 'de.md'));
+    const { problems } = await validateLocalIntegration({
+      manifestPath,
+      checkDockerImage: fakeImageChecker(),
+      downloadCover: workingCover,
+    });
+    expect(problems).to.have.lengthOf(1);
+    expect(problems[0].level).to.equal('warning');
+    expect(problems[0].reason).to.match(
+      /^docs\/de\.md: cannot be read \(.*\) — the indexer would index without the de documentation$/,
+    );
   });
 
   it('should report an error when the manifest file cannot be read', async () => {

@@ -142,17 +142,20 @@ function validateTemplateRules(template, path) {
   if (template.timezone !== undefined && !isValidTimezone(template.timezone)) {
     errors.push(`${path}.timezone: must be a known IANA timezone`);
   }
+  const inputErrors = [];
   const seenInputKeys = new Set();
   (template.inputs ?? []).forEach((input, i) => {
     const inputPath = `${path}.inputs.${i}`;
     if (seenInputKeys.has(input.key)) {
-      errors.push(`${inputPath}.key: duplicate key "${input.key}"`);
+      inputErrors.push(`${inputPath}.key: duplicate key "${input.key}"`);
     }
     seenInputKeys.add(input.key);
-    errors.push(...validateInputRules(input, inputPath));
+    inputErrors.push(...validateInputRules(input, inputPath));
   });
-  // The tariff is checked once the inputs it is substituted with are sound.
-  if (errors.length === 0 && template.tariff !== undefined) {
+  errors.push(...inputErrors);
+  // The tariff is checked once the inputs it is substituted with are sound
+  // (an unrelated error, the timezone, does not hide its own).
+  if (inputErrors.length === 0 && template.tariff !== undefined) {
     errors.push(...validateTemplateTariff(template, path));
   }
   return errors;

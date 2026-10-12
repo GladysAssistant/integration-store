@@ -114,13 +114,17 @@ export async function validateLocalIntegration({
     }
   }
   // Optional languages: an absent file is simply not indexed, a present but
-  // too small one would be skipped by the indexer with a warning.
+  // too small (or unreadable) one would be skipped by the indexer with a
+  // warning.
   for (const lang of DOCS_OPTIONAL_LANGUAGES) {
     const path = docsFilePath(lang);
     let content;
     try {
       content = await readFile(join(dirname(manifestPath), ...path.split('/')), 'utf8');
-    } catch {
+    } catch (e) {
+      if (e.code !== 'ENOENT') {
+        warning(`${path}: cannot be read (${e.message}) — the indexer would index without the ${lang} documentation`);
+      }
       continue;
     }
     if (content.trim().length < DOCS_MIN_CHARS) {
