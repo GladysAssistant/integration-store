@@ -2,6 +2,7 @@ import { EMPTY_BLOCKLIST, blocklistRejectionReason, findBlocklistEntry } from '.
 import { resolveCategories } from './categories.js';
 import {
   DOCS_LANGUAGES,
+  DOCS_OPTIONAL_LANGUAGES,
   DOCS_MIN_CHARS,
   INDEX_FORMAT,
   MANIFEST_FILE_NAME,
@@ -48,19 +49,27 @@ async function resolveManifest(repository, fetchManifestFile) {
 }
 
 /**
- * Fetch and validate the mandatory user documentation (docs/en.md and
- * docs/fr.md, B.9): both files must exist and hold at least DOCS_MIN_CHARS
- * characters, otherwise the integration is rejected. Valid files are re-hosted
- * next to the covers, and the index references the re-hosted URLs (C.6).
+ * Fetch and validate the user documentation (B.9): the mandatory files
+ * (docs/en.md and docs/fr.md) must exist and hold at least DOCS_MIN_CHARS
+ * characters, otherwise the integration is rejected; the optional ones (the
+ * other languages of the Gladys UI) are indexed when present and sound,
+ * skipped with a warning when present but too small or undownloadable, and
+ * silently absent otherwise. Valid files are re-hosted next to the covers,
+ * and the index references the re-hosted URLs (C.6), one per language found.
  * @param {object} repository - Repository entry.
  * @param {Function} fetchDocFile - Injected doc fetcher.
  * @param {string} storeBaseUrl - Public base URL of the published store.
- * @returns {Promise<{docs: object, docsFiles: {fileName: string, data: Buffer}[]}|{rejectionReason: string}>} Re-hosted URLs and files, or rejection reason.
+ * @returns {Promise<{docs: object, docsFiles: {fileName: string, data: Buffer}[], warnings: string[]}|{rejectionReason: string}>} Re-hosted URLs, files and warnings, or rejection reason.
  */
 async function resolveDocs(repository, fetchDocFile, storeBaseUrl) {
   const docs = {};
   const docsFiles = [];
-  for (const lang of DOCS_LANGUAGES) {
+  const warnings = [];
+  const languages = [
+    ...DOCS_LANGUAGES.map((lang) => ({ lang, mandatory: true })),
+    ...DOCS_OPTIONAL_LANGUAGES.map((lang) => ({ lang, mandatory: false })),
+  ];
+  for (const { lang, mandatory } of languages) {
     const path = docsFilePath(lang);
     const result = await fetchDocFile({
       owner: repository.owner,
@@ -68,20 +77,29 @@ async function resolveDocs(repository, fetchDocFile, storeBaseUrl) {
       defaultBranch: repository.defaultBranch,
       lang,
     });
+    let problem = null;
     if (result.status === 'not_found') {
-      return { rejectionReason: `${path}: file not found — user documentation is mandatory` };
+      if (!mandatory) {
+        continue;
+      }
+      problem = 'file not found — user documentation is mandatory';
+    } else if (result.status === 'error') {
+      problem = result.reason;
+    } else if (result.raw.trim().length < DOCS_MIN_CHARS) {
+      problem = `must hold at least ${DOCS_MIN_CHARS} characters of user documentation`;
     }
-    if (result.status === 'error') {
-      return { rejectionReason: `${path}: ${result.reason}` };
-    }
-    if (result.raw.trim().length < DOCS_MIN_CHARS) {
-      return { rejectionReason: `${path}: must hold at least ${DOCS_MIN_CHARS} characters of user documentation` };
+    if (problem !== null) {
+      if (mandatory) {
+        return { rejectionReason: `${path}: ${problem}` };
+      }
+      warnings.push(`${path}: ${problem} — indexed without the ${lang} documentation`);
+      continue;
     }
     const fileName = `${repository.owner}--${repository.repo}/${lang}.md`;
     docs[lang] = `${storeBaseUrl}/docs/${fileName}`;
     docsFiles.push({ fileName, data: Buffer.from(result.raw, 'utf8') });
   }
-  return { docs, docsFiles };
+  return { docs, docsFiles, warnings };
 }
 
 /**
@@ -150,7 +168,8 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
  * Build the store index from the repositories tagged with the store topic:
  * skip the blocked ones (data/blocklist.json), fetch each manifest, validate
  * it (schema + code rules), check the mandatory
- * user documentation (docs/en.md + docs/fr.md, re-hosted), check that the
+ * user documentation (docs/en.md + docs/fr.md, re-hosted, plus the optional
+ * languages when present), check that the
  * Docker images (main and sub-containers) actually exist on their registry,
  * validate and re-host each cover, and produce the deterministic
  * index.json / rejected.json contents
@@ -215,17 +234,20 @@ export async function buildIndex({
       continue;
     }
 
-    // Mandatory user documentation (B.9): absent or too small → rejection. The
-    // fine structure of the files (template sections) stays conventional.
+    // Mandatory user documentation (B.9): absent or too small → rejection;
+    // an optional language that is present but unsound → warning. The fine
+    // structure of the files (template sections) stays conventional.
     const {
       docs,
       docsFiles,
+      warnings: docsWarnings,
       rejectionReason: docsRejectionReason,
     } = await resolveDocs(repository, fetchDocFile, storeBaseUrl);
     if (docsRejectionReason !== undefined) {
       reject(REJECTION_LEVELS.ERROR, docsRejectionReason);
       continue;
     }
+    docsWarnings.forEach((docsWarning) => reject(REJECTION_LEVELS.WARNING, docsWarning));
 
     // A definitive registry verdict (image missing, not anonymously pullable)
     // rejects the integration: a catalog entry must have an image at the end —

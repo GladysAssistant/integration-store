@@ -173,4 +173,107 @@ describe('widget-content.schema.json', () => {
     ).to.equal(false);
     expect(accepts([{ type: 'button', action: { key: 'start' } }])).to.equal(false);
   });
+
+  describe('action fields (the form behind a button)', () => {
+    const button = (fields) => [
+      { type: 'button', label: { en: 'Pallet delivered' }, action: { key: 'delivery', fields } },
+    ];
+    const field = (extra) => ({ key: 'bags', type: 'number', label: { en: 'Bags delivered' }, ...extra });
+
+    it('should accept the reference form of the spec, and an empty list (no form at all)', () => {
+      const content = {
+        components: [
+          {
+            type: 'button',
+            label: { en: 'Pallet delivered', fr: 'Palette livrée' },
+            icon: 'truck',
+            action: {
+              key: 'delivery',
+              fields: [
+                {
+                  key: 'bags',
+                  type: 'number',
+                  required: true,
+                  min: 1,
+                  max: 200,
+                  default: 72,
+                  label: { en: 'Bags delivered', fr: 'Sacs livrés' },
+                },
+                {
+                  key: 'price_per_bag',
+                  type: 'number',
+                  required: true,
+                  min: 0,
+                  max: 50,
+                  default: 7.3,
+                  label: { en: 'Price per bag', fr: 'Prix par sac' },
+                },
+              ],
+            },
+          },
+        ],
+      };
+      expect(validate(content), JSON.stringify(validate.errors)).to.equal(true);
+      expect(accepts(button([]))).to.equal(true);
+      expect(
+        accepts(
+          button([
+            { key: 'note', type: 'string', label: { en: 'Note' }, placeholder: { en: 'Delivery note' }, default: 'x' },
+            { key: 'paid', type: 'boolean', label: { en: 'Paid' }, default: true },
+            {
+              key: 'supplier',
+              type: 'select',
+              label: { en: 'Supplier' },
+              display: 'radio',
+              default: 'acme',
+              options: [{ value: 'acme', label: { en: 'Acme', fr: 'Acme' } }],
+              description: { en: 'Who delivered.' },
+            },
+          ]),
+        ),
+      ).to.equal(true);
+    });
+
+    it('should bound the form to 4 fields of the restricted grammar', () => {
+      expect(accepts(button([1, 2, 3, 4, 5].map((i) => field({ key: `f${i}` }))))).to.equal(false);
+      expect(accepts(button([field({ type: 'section' })]))).to.equal(false);
+      expect(
+        accepts(button([field({ type: 'multi_select', options: [{ value: 'a', label: { en: 'A' } }] })])),
+      ).to.equal(false);
+      expect(accepts(button([field({ type: 'secret' })]))).to.equal(false);
+      expect(accepts(button([field({ key: 'Bad-Key' })]))).to.equal(false);
+      expect(accepts(button([field({ nope: 1 })]))).to.equal(false);
+      expect(accepts(button([field({ label: 'Bags' })]))).to.equal(false);
+    });
+
+    it('should refuse a dynamic source: the options are written in the content', () => {
+      expect(accepts(button([field({ type: 'select', source: 'devices' })]))).to.equal(false);
+      expect(accepts(button([field({ type: 'select' })]))).to.equal(false);
+      expect(accepts(button([field({ options: [{ value: 'a', label: { en: 'A' } }] })]))).to.equal(false);
+      expect(accepts(button([field({ display: 'radio' })]))).to.equal(false);
+    });
+
+    it('should apply the per-type rules of min/max, placeholder and default', () => {
+      expect(accepts(button([field({ type: 'string', min: 1 })]))).to.equal(false);
+      expect(accepts(button([field({ type: 'boolean', placeholder: { en: 'x' } })]))).to.equal(false);
+      expect(accepts(button([field({ default: 'many' })]))).to.equal(false);
+      expect(accepts(button([field({ type: 'string', default: 1 })]))).to.equal(false);
+      expect(accepts(button([field({ type: 'boolean', default: 'yes' })]))).to.equal(false);
+      expect(
+        accepts(button([field({ type: 'select', options: [{ value: 'a', label: { en: 'A' } }], default: 1 })])),
+      ).to.equal(false);
+      expect(accepts(button([field({ type: 'string', default: 'x'.repeat(1001) })]))).to.equal(false);
+      expect(accepts(button([field({ type: 'string', default: 'x'.repeat(1000) })]))).to.equal(true);
+    });
+
+    it('should bound the texts like every widget string', () => {
+      expect(accepts(button([field({ label: { en: 'x'.repeat(41) } })]))).to.equal(false);
+      expect(accepts(button([field({ description: { en: 'x'.repeat(201) } })]))).to.equal(false);
+      expect(accepts(button([field({ placeholder: { en: 'x'.repeat(41) } })]))).to.equal(false);
+      expect(
+        accepts(button([field({ type: 'select', options: [{ value: 'a', label: { en: 'x'.repeat(41) } }] })])),
+      ).to.equal(false);
+      expect(accepts(button([field({ label: { en: 'x'.repeat(40), fr: 'Sacs' } })]))).to.equal(true);
+    });
+  });
 });

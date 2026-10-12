@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://gladysassistant.github.io/integration-store/manifest.schema.json",
   "title": "Gladys Assistant external integration manifest",
-  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, action keys, webhook keys, widget keys, scene trigger keys, scene action keys and the variable/output keys of a scene declaration must be unique in their list, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container port names must be unique across the whole manifest, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments, and every `{{port:<name>}}` placeholder of a `section` text must reference a declared port name (never allowed in `contact_schema`, in widget `settings` nor in scene trigger/action `fields`, the screens rendering them carry no container state). `categories` is validated in two ordered stages: the shape below rejects like any other malformed field, then the controlled vocabulary filters in code — unknown keys are dropped with a warning, never a rejection. Older Gladys releases validate manifests with a strict field allowlist, so a manifest declaring a field or a `type` value they do not know must set a `gladys_version` range whose minimum is at least the first release accepting it (code-enforced by the indexer): 4.86.0 for `categories`, 5.1.0 for `type: \"provider\"`, `widgets`, `scene_triggers` and `scene_actions`. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
+  "description": "Schema of the `gladys-assistant-integration.json` file placed at the root of an integration repository (manifest_version 1). This file is the canonical source: the store indexer and the Gladys server both validate manifests against it. Some rules cannot be expressed in JSON Schema and are enforced by code: `version` must be strict semver, `gladys_version` must be a valid semver range (npm syntax), `docker_image` must be a well-formed image reference with an explicit tag or digest (main image and sub-containers alike), `config_schema` keys, `contact_schema` keys, `account_schema` keys, action keys, webhook keys, widget keys, scene trigger keys, scene action keys and the variable/output keys of a scene declaration must be unique in their list, defaults must match their field type and are not allowed on dynamic-`source` selects, sub-container names must be unique, sub-container port names must be unique across the whole manifest, sub-container `env` cannot use reserved GLADYS_* keys and volume paths cannot contain `..` segments, and every `{{port:<name>}}` placeholder of a `section` text must reference a declared port name (never allowed in `contact_schema`, in `account_schema`, in widget `settings` nor in scene trigger/action `fields`, the screens rendering them carry no container state). `energy_contracts` adds its own code rules: template, input and calendar keys unique in their list, `timezone` a known IANA name, a select input's `default` among its `options`, every `default` matching its input type, and the `tariff` of each template validated against tariff.schema.json (vendored next to this schema, canonical owner GladysAssistant/energy-contracts) after the `{{input:<key>}}` placeholders are substituted, plus the semantic rules of the core engine (a consumption component needs a fallback or a last rule without `when`, tier upper bounds above their lower bounds, unique component keys, a tax applying to components declared before it, every referenced calendar listed in `tariff.calendars` and in the template `calendars`, at least one component in `rules` mode, only `fixed` components in `delegated` mode). `categories` is validated in two ordered stages: the shape below rejects like any other malformed field, then the controlled vocabulary filters in code — unknown keys are dropped with a warning, never a rejection. Older Gladys releases validate manifests with a strict field allowlist, so a manifest declaring a field, a `type` value or a `source` value they do not know must set a `gladys_version` range whose minimum is at least the first release accepting it (code-enforced by the indexer): 4.86.0 for `categories`, 5.1.0 for `type: \"provider\"`, `widgets`, `scene_triggers` and `scene_actions`, 5.2.0 for `type: \"calendar\"`, `account_schema`, `energy_contracts` and `source: \"houses\"`. The repository must also ship the mandatory user documentation (`docs/en.md` and `docs/fr.md`, at least 300 characters each), checked by the indexer outside of this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["manifest_version", "type", "name", "description", "version", "docker_image", "gladys_version"],
@@ -14,8 +14,8 @@
     },
     "type": {
       "type": "string",
-      "enum": ["device", "communication", "weather", "provider"],
-      "description": "Integration type: the primary contract the Gladys core consumes. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either; \"provider\" integrations are made only of capabilities (dashboard widgets, scene triggers and actions): no device surface, a configuration-only page, and at least one capability field (`widgets`, `scene_triggers` or `scene_actions`) is required. Any type may declare capability fields on top of its primary contract; a new contract the core does not consume through a dedicated interface is a capability field, never a type. Declaring `type: \"provider\"` requires gladys_version >= 5.1.0, the first release accepting it (code-enforced by the indexer)."
+      "enum": ["device", "communication", "weather", "calendar", "provider"],
+      "description": "Integration type: the primary contract the Gladys core consumes. \"device\" integrations publish discovered devices; \"communication\" integrations (messaging channels, contract B.15) exchange messages for Gladys users and only expose the Configuration screen — their family (bidirectional chat channel or send-only notification channel) is declared by the mandatory `messaging` field; \"weather\" integrations (weather providers, contract B.18) answer the weather requests of the Gladys core over WebSocket, in the contractual pivot format normalized by the core, and expose no device screen either; \"calendar\" integrations (calendar providers, capabilities/calendar-type.md) push calendars and events into the core calendar store through the host API, for the users who enabled their own account in the \"My calendars\" block described by the optional `account_schema` — no device screen, the calendar view and the calendar scene triggers consume what they push; \"provider\" integrations are made only of capabilities (dashboard widgets, scene triggers and actions, energy contracts): no device surface, a configuration-only page, and at least one capability field (`widgets`, `scene_triggers`, `scene_actions` or `energy_contracts`) is required. Any type may declare capability fields on top of its primary contract; a new contract the core does not consume through a dedicated interface is a capability field, never a type. Declaring `type: \"provider\"` requires gladys_version >= 5.1.0 and `type: \"calendar\"` requires gladys_version >= 5.2.0, the first releases accepting them (code-enforced by the indexer)."
     },
     "name": {
       "type": "string",
@@ -49,7 +49,7 @@
     "gladys_version": {
       "type": "string",
       "minLength": 1,
-      "description": "Range of compatible Gladys versions, npm semver range syntax (e.g. \">=4.62.0\"). Used by Gladys to filter the catalog. Its minimum must also cover every manifest field or `type` value that older releases reject as unknown (code-enforced by the indexer): >= 4.86.0 when `categories` is declared, >= 5.1.0 when `type` is \"provider\" or when `widgets`, `scene_triggers` or `scene_actions` is declared."
+      "description": "Range of compatible Gladys versions, npm semver range syntax (e.g. \">=4.62.0\"). Used by Gladys to filter the catalog. Its minimum must also cover every manifest field, `type` value or `source` value that older releases reject as unknown (code-enforced by the indexer): >= 4.86.0 when `categories` is declared, >= 5.1.0 when `type` is \"provider\" or when `widgets`, `scene_triggers` or `scene_actions` is declared, >= 5.2.0 when `type` is \"calendar\", when `account_schema` or `energy_contracts` is declared or when a field of any form (`config_schema`, `contact_schema`, `account_schema`, action `fields`, widget `settings`, scene trigger/action `fields`) uses `source: \"houses\"`."
     },
     "cover_image": {
       "type": "string",
@@ -153,6 +153,28 @@
         ]
       }
     },
+    "account_schema": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Calendar integrations only (capabilities/calendar-type.md): per-user account form rendered by the core as the \"My calendars\" block of the Configuration screen, where every user fills their OWN values (stored per user, passed to the integration through GET /calendar/account) and enables the integration for themselves — an integration with nothing to ask per user (a public feed) declares no `account_schema`, the block then only carries the Enable/Disable action. Same flat field format and rules as `config_schema`, minus `oauth2` and `account_link` fields (the Connect relay is integration-scoped, never per user — per-user OAuth2 is a later milestone) and minus the `{{port:<name>}}` placeholder (code-enforced: the per-user block is rendered from the reduced view a non-admin gets, which carries no container state). Declaring the field requires gladys_version >= 5.2.0, the first release accepting it (older cores reject unknown manifest fields — code-enforced by the indexer).",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/definitions/configField"
+          },
+          {
+            "properties": {
+              "type": {
+                "not": {
+                  "enum": ["oauth2", "account_link"]
+                }
+              }
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
     "webhooks": {
       "type": "array",
       "minItems": 1,
@@ -187,6 +209,39 @@
       "description": "Scene actions declared for the Gladys scene editor (\"Integrations\" category of the action picker; capability field, any type may declare it). A scene reaching one relays it to the integration over WebSocket with the resolved `fields` (scene variables substituted in string fields), acked within the declared timeout; the `outputs` of the command result are exposed to the following actions. Same key rules as scene_triggers (triggers and actions are two namespaces); a required field added without a default is a breaking update. Declaring the field requires gladys_version >= 5.1.0, the first release accepting it (code-enforced by the indexer).",
       "items": {
         "$ref": "#/definitions/sceneAction"
+      }
+    },
+    "energy_contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Energy contracts capability (capabilities/energy-contracts.md; capability field, any type may declare it): the contract `templates` the integration offers in the Gladys contract wizard (a tariff definition of the core rule engine in `rules` mode, validated against tariff.schema.json — vendored next to this schema, canonical owner GladysAssistant/energy-contracts — after the `{{input:<key>}}` placeholders are substituted; or a `delegated` pricing computed by the integration over energy-contract.price) and the tariff `calendars` it feeds through POST /energy/calendar (day colours, spot prices, critical peak days). At least one of the two lists is required. Calendar keys are global per Gladys instance and owned by the first installed integration declaring them: a template may reference a calendar fed by another integration. Shown on the install screen (templates, calendars, and a warning when a template delegates its pricing). Declaring the field requires gladys_version >= 5.2.0, the first release accepting it (older cores reject unknown manifest fields — code-enforced by the indexer).",
+      "anyOf": [
+        {
+          "required": ["templates"]
+        },
+        {
+          "required": ["calendars"]
+        }
+      ],
+      "properties": {
+        "templates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Contract templates (keys unique, code-enforced).",
+          "items": {
+            "$ref": "#/definitions/energyContractTemplate"
+          }
+        },
+        "calendars": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "description": "Tariff calendars the integration publishes (keys unique, code-enforced).",
+          "items": {
+            "$ref": "#/definitions/energyCalendar"
+          }
+        }
       }
     }
   },
@@ -242,6 +297,21 @@
       }
     },
     {
+      "$comment": "account_schema only makes sense on calendar integrations",
+      "if": {
+        "required": ["account_schema"],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "calendar"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
       "$comment": "a provider integration is made only of capabilities: at least one capability field is required",
       "if": {
         "properties": {
@@ -262,6 +332,9 @@
           },
           {
             "required": ["scene_actions"]
+          },
+          {
+            "required": ["energy_contracts"]
           }
         ],
         "type": "object"
@@ -311,7 +384,7 @@
             "account_link",
             "section"
           ],
-          "description": "Field widget type. `secret` values are never sent back to the frontend; `oauth2` renders a Connect button (relayed OAuth2 authorization-code flow, tokens stored off-schema by the integration); `account_link` renders a Connect button too, for a provider that never redirects back (a QR sign-in the user approves in the vendor app, a pairing to confirm on a device): no redirect URI, no anti-CSRF state and no callback are involved, the integration detects the approval on its side and reports it through the connection status; `multi_select` renders checkboxes and stores an array of option values; `section` is a purely presentational intro block (title, plain text, https links) that stores no value."
+          "description": "Field widget type. `secret` values are never sent back to the frontend; `oauth2` renders a Connect button (relayed OAuth2 authorization-code flow, tokens stored off-schema by the integration); `account_link` renders a Connect button too, for a provider that never redirects back (a QR sign-in the user approves in the vendor app, a pairing to confirm on a device): no redirect URI, no anti-CSRF state and no callback are involved, the integration detects the approval on its side and reports it through the connection status; `number` renders a numeric input accepting integers and decimals alike, bounded only by `min`/`max`; `multi_select` renders checkboxes and stores an array of option values; `section` is a purely presentational intro block (title, plain text, https links) that stores no value."
         },
         "label": {
           "$ref": "#/definitions/multiLanguageText"
@@ -359,8 +432,8 @@
         },
         "source": {
           "type": "string",
-          "enum": ["devices"],
-          "description": "Dynamic options of a `select` or `multi_select` field, provided by the Gladys core (mutually exclusive with `options`) — a reserved enum, never a URL nor an expression. `devices`: the options are the already-created devices of the integration (label = device name, value = external_id)."
+          "enum": ["devices", "houses"],
+          "description": "Dynamic options of a `select` or `multi_select` field, provided by the Gladys core (mutually exclusive with `options`; `default` is not allowed with a source, code-enforced) — a reserved enum, never a URL nor an expression. `devices`: the options are the already-created devices of the integration (label = device name, value = external_id). `houses`: the options are the houses of Gladys (label = house name, value = selector, the identifier GET /house returns) — picking a house needs no `location` authorization, only the house the user picked reaches the integration, and an integration without `location: true` may only write such a value back unchanged (a no-op; any other value is refused with 403). Declaring `source: \"houses\"` requires gladys_version >= 5.2.0, the first release accepting it (older cores reject a dynamic source they do not know — code-enforced by the indexer)."
         },
         "display": {
           "type": "string",
@@ -753,6 +826,229 @@
           "enum": ["fire_and_forget", "sync"],
           "default": "fire_and_forget",
           "description": "`fire_and_forget` (default): the third party only awaits an acknowledgment — Gladys answers immediately and relays asynchronously (the Netatmo-style event stream). `sync`: the caller awaits the integration response (challenge/response registrations, Strava/Microsoft Graph style) — the handler's resolved { status (200-499), contentType, body (≤ 64 KB) } is returned verbatim through Gladys Plus."
+        }
+      }
+    },
+    "energyContractTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "country", "currency", "pricing_mode", "version"],
+      "description": "A contract template offered in the Gladys contract wizard: a key never renamed once published (contracts store it in template_key), a tariff definition of the core rule engine in `rules` mode (validated against tariff.schema.json after the `{{input:<key>}}` placeholders are substituted with the declared defaults, else a sample of the right type — a placeholder naming no declared input rejects the manifest), optional in `delegated` mode where it may only carry `fixed` components (the integration prices the energy, the core adds the subscription at display time). Every calendar the tariff references is listed in `calendars`.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "description": "Unique key of the template within the integration (code-enforced), stored by the contracts created from it. Never renamed once published."
+        },
+        "name": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": "Name of the template in the wizard (multi-language, `en` required, 1-64 characters per language).",
+          "type": "object"
+        },
+        "description": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": "Shown under the template in the wizard (multi-language, `en` required, at most 512 characters per language).",
+          "type": "object"
+        },
+        "country": {
+          "type": "string",
+          "pattern": "^[A-Z]{2}$",
+          "description": "ISO 3166-1 alpha-2 country code of the contract."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 code of the contract currency."
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "IANA timezone the tariff conditions are evaluated in (a known name, code-enforced; `Etc/GMT` for a tariff whose slots ignore daylight saving). Defaults to the Gladys system timezone."
+        },
+        "pricing_mode": {
+          "type": "string",
+          "enum": ["rules", "delegated"],
+          "description": "`rules`: the core engine prices the energy from the `tariff`. `delegated`: the integration prices it itself over the energy-contract.price WebSocket message (flagged \"priced by the integration\" on the install screen and in the wizard)."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Version of the template (free string, e.g. a date): a contract is never modified silently, the user is offered \"update the tariff from the template\" when it changes."
+        },
+        "calendars": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "description": "Keys of the calendars the tariff reads: every calendar referenced by the tariff must be listed here (code-enforced). A key declared by this integration, by another installed one or by the community catalogue; a missing provider shows on the contract as a call to action."
+        },
+        "inputs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/definitions/energyTemplateInput"
+          },
+          "description": "Parameters the user fills in when creating a contract from the template (keys unique within the template, code-enforced)."
+        },
+        "tariff": {
+          "type": "object",
+          "description": "Tariff definition of the core rule engine (tariff.schema.json, `tariff_version` 1): components evaluated in order, `{{input:<key>}}` placeholders substituted before validation. Required in `rules` mode (with at least one component), optional in `delegated` mode (only `fixed` components allowed)."
+        }
+      },
+      "if": {
+        "properties": {
+          "pricing_mode": {
+            "const": "rules"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "required": ["tariff"]
+      }
+    },
+    "energyTemplateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type"],
+      "description": "A template parameter filled by the user and substituted into the tariff (`{{input:<key>}}`: a string that is exactly a placeholder takes the value whatever its type, a placeholder inside a longer string is replaced by its text) or sent to the integration in delegated mode. The restricted input grammar of the energy contract spec: `number`, `select` (with `options`), `string`, or `time_intervals` (a list of [\"HH:MM\", \"HH:MM\"] slots picked on the 30-minute grid, the off-peak hours) — never a secret.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,64}$",
+          "description": "Unique key of the input within the template (code-enforced), the name the tariff placeholders reference."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["number", "select", "string", "time_intervals"]
+        },
+        "label": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": "Label of the input in the wizard (multi-language, `en` required, 1-64 characters per language).",
+          "type": "object"
+        },
+        "description": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/multiLanguageText"
+            }
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "Help text under the input (multi-language, `en` required, at most 256 characters per language).",
+          "type": "object"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16,
+          "description": "Unit displayed next to the input (kVA, kW, GBP/kWh...)."
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "description": "Choices of a `select` input, strings or numbers (a numeric option may feed a price or an amount of the tariff). `select` inputs only (code-enforced)."
+        },
+        "default": {
+          "description": "Default value, pre-filled in the wizard and used to check the tariff at publication time. Must match the input type (code-enforced): a finite number, a string, one of the `options`, or a list of [start, end] time intervals."
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "energyCalendar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "description": "A tariff calendar the integration publishes through POST /energy/calendar: dated string values within the declared `values` enum (day colours, holidays, event days) on a daily, 30-minute or 15-minute grid, or numeric prices per kWh (`values` omitted, `currency` set). A daily calendar may start its day at another local time (`day_starts_at`, 06:00 for the Tempo colour). Keys are global per Gladys instance and owned by the first installed integration declaring them; the granularity of a key never changes once published.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "description": "Unique key of the calendar within the integration (code-enforced); the key the tariffs reference, without any provider prefix."
+        },
+        "granularity": {
+          "type": "string",
+          "enum": ["day", "thirty_minutes", "fifteen_minutes"],
+          "default": "day",
+          "description": "Grid of the entries: one value per local day, per 30-minute slot or per 15-minute slot (a spot calendar follows its market product)."
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "IANA timezone of the calendar (a known name, code-enforced): the day boundaries of a daily calendar, the local clock of a sub-daily one. Defaults to the Gladys system timezone."
+        },
+        "day_starts_at": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "default": "00:00",
+          "description": "Local time a daily value starts applying (`HH:MM`)."
+        },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": "Enum of the accepted string values (a value outside it is refused at publication); omitted for a price calendar."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 currency of a price calendar."
         }
       }
     },

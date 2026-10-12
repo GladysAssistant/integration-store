@@ -1,0 +1,117 @@
+{
+  "manifest_version": 1,
+  "type": "provider",
+  "name": "Octopus Energy Demo",
+  "description": {
+    "en": "Energy contract templates and a half-hourly price calendar.",
+    "fr": "Modèles de contrat d'énergie et calendrier de prix à la demi-heure."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/john/gladys-octopus-energy:1.0.0",
+  "gladys_version": ">=5.2.0",
+  "categories": ["energy"],
+  "config_schema": [
+    {
+      "key": "api_key",
+      "type": "secret",
+      "label": { "en": "Octopus API key", "fr": "Clé d'API Octopus" },
+      "required": true
+    },
+    {
+      "key": "house",
+      "type": "select",
+      "source": "houses",
+      "label": { "en": "House", "fr": "Maison" },
+      "description": { "en": "The house whose contract this integration prices." },
+      "required": true
+    }
+  ],
+  "energy_contracts": {
+    "templates": [
+      {
+        "key": "economy-7",
+        "name": { "en": "Economy 7", "fr": "Economy 7" },
+        "description": { "en": "Reduced night price, seven hours per region, GMT all year." },
+        "country": "GB",
+        "currency": "GBP",
+        "timezone": "Etc/GMT",
+        "pricing_mode": "rules",
+        "version": "2026-01-01",
+        "calendars": ["agile-gb"],
+        "inputs": [
+          {
+            "key": "night_price",
+            "type": "number",
+            "unit": "GBP/kWh",
+            "default": 0.12,
+            "label": { "en": "Night price", "fr": "Prix de nuit" },
+            "description": { "en": "Price of a night kWh." }
+          },
+          { "key": "region", "type": "select", "options": ["A", "B"], "default": "A", "label": { "en": "Region" } },
+          {
+            "key": "off_peak_slots",
+            "type": "time_intervals",
+            "default": [["00:30", "07:30"]],
+            "label": { "en": "Off-peak hours", "fr": "Heures creuses" },
+            "required": true
+          },
+          { "key": "note", "type": "string", "label": { "en": "Note" } }
+        ],
+        "tariff": {
+          "tariff_version": 1,
+          "calendars": ["agile-gb"],
+          "components": [
+            {
+              "key": "energy",
+              "kind": "consumption",
+              "rules": [
+                { "label": "night", "when": { "time": "{{input:off_peak_slots}}" }, "price": "{{input:night_price}}" },
+                { "when": { "calendar": { "agile-gb": "cap" } }, "price": 0.3 }
+              ],
+              "fallback": { "price": 0.28 }
+            },
+            { "key": "vat", "kind": "tax", "rate": 5, "applies_to": ["energy"] }
+          ]
+        }
+      },
+      {
+        "key": "agile",
+        "name": { "en": "Octopus Agile" },
+        "country": "GB",
+        "currency": "GBP",
+        "pricing_mode": "delegated",
+        "version": "1",
+        "inputs": [{ "key": "region", "type": "select", "options": ["A", "B"] }],
+        "tariff": {
+          "tariff_version": 1,
+          "components": [{ "key": "standing", "kind": "fixed", "amount": 0.5, "per": "day" }]
+        }
+      },
+      {
+        "key": "flat-rate",
+        "name": { "en": "Flat rate" },
+        "country": "GB",
+        "currency": "GBP",
+        "pricing_mode": "rules",
+        "version": "1",
+        "tariff": {
+          "tariff_version": 1,
+          "components": [
+            { "key": "energy", "kind": "consumption", "fallback": { "price": 0.28 } },
+            { "key": "standing", "kind": "fixed", "amount": 0.5, "per": "day" }
+          ]
+        }
+      }
+    ],
+    "calendars": [
+      { "key": "agile-gb", "granularity": "day", "values": ["cap", "normal"], "timezone": "Europe/London" },
+      {
+        "key": "spot-gb",
+        "granularity": "thirty_minutes",
+        "currency": "GBP",
+        "timezone": "Europe/London",
+        "day_starts_at": "00:00"
+      }
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "manifest_version": 1,
+  "type": "calendar",
+  "name": "Nextcloud Calendar",
+  "description": {
+    "en": "Sync your Nextcloud calendars and events into Gladys.",
+    "fr": "Synchronise vos agendas Nextcloud et leurs événements dans Gladys."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/john/gladys-nextcloud-calendar:1.0.0",
+  "gladys_version": ">=5.2.0",
+  "categories": ["services"],
+  "cover_image": "https://raw.githubusercontent.com/john/gladys-nextcloud-calendar/main/cover.jpg",
+  "config_schema": [
+    {
+      "key": "sync_interval",
+      "type": "number",
+      "label": { "en": "Sync interval (minutes)", "fr": "Intervalle de synchronisation (minutes)" },
+      "default": 15,
+      "min": 5,
+      "max": 1440
+    }
+  ],
+  "account_schema": [
+    {
+      "key": "intro",
+      "type": "section",
+      "label": { "en": "Your Nextcloud account", "fr": "Votre compte Nextcloud" },
+      "description": {
+        "en": "Create an app password in Nextcloud, then enable the integration. Gladys is reached at {{gladys_host}}.",
+        "fr": "Créez un mot de passe d'application dans Nextcloud, puis activez l'intégration. Gladys est joignable sur {{gladys_host}}."
+      },
+      "links": [{ "url": "https://docs.nextcloud.com/", "label": { "en": "Nextcloud docs", "fr": "Doc Nextcloud" } }]
+    },
+    {
+      "key": "server_url",
+      "type": "string",
+      "label": { "en": "Server URL", "fr": "URL du serveur" },
+      "placeholder": { "en": "https://cloud.example.com" },
+      "required": true
+    },
+    {
+      "key": "username",
+      "type": "string",
+      "label": { "en": "Username", "fr": "Nom d'utilisateur" },
+      "required": true
+    },
+    {
+      "key": "app_password",
+      "type": "secret",
+      "label": { "en": "App password", "fr": "Mot de passe d'application" },
+      "required": true
+    },
+    {
+      "key": "shared_by_default",
+      "type": "boolean",
+      "label": { "en": "Share new calendars with the household", "fr": "Partager les nouveaux agendas avec le foyer" },
+      "default": false
+    }
+  ]
+}

@@ -6,11 +6,13 @@ import semver from 'semver';
 
 import {
   CAPABILITY_MANIFEST_FIELDS,
+  CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION,
   MANIFEST_FIELD_MIN_GLADYS_VERSION,
   MANIFEST_TYPE_MIN_GLADYS_VERSION,
   SUPPORTED_MANIFEST_VERSION,
 } from './constants.js';
 import { isValidDockerImageReference } from './parseDockerImageReference.js';
+import { validateEnergyContractsRules } from './validateEnergyContracts.js';
 
 const schemaPath = fileURLToPath(new URL('../schemas/manifest.schema.json', import.meta.url));
 export const manifestSchema = JSON.parse(readFileSync(schemaPath, 'utf8'));
@@ -41,28 +43,58 @@ function formatAjvError(ajvError) {
   return `manifest${path}: ${ajvError.message}`;
 }
 
+// Schema rules whose raw AJV errors would not tell the developer what to do:
+// an if/then at the manifest root yields a generic "must match \"then\"
+// schema" plus the errors of its consequence (one "must have required
+// property" sibling per capability field for the provider rule, a `const`
+// error on the type for the account_schema rule), and an anyOf yields "must
+// match a schema in anyOf" plus a line per branch. Every error of such a
+// cluster is collapsed into the explicit rule.
+const EXPLICIT_SCHEMA_RULES = [
+  {
+    // capabilities/provider-type.md
+    clusterPath: `#/allOf/${manifestSchema.allOf.findIndex((rule) => rule.if.properties?.type?.const === 'provider')}/`,
+    message:
+      `manifest.type: a provider integration must declare at least one capability field` +
+      ` (${CAPABILITY_MANIFEST_FIELDS.join(', ')})`,
+  },
+  {
+    // capabilities/calendar-type.md
+    clusterPath: `#/allOf/${manifestSchema.allOf.findIndex((rule) => rule.if.required?.includes('account_schema'))}/`,
+    message: 'manifest.account_schema: only allowed on calendar integrations',
+  },
+  {
+    // capabilities/energy-contracts.md
+    clusterPath: '#/properties/energy_contracts/anyOf',
+    message: 'manifest.energy_contracts: must declare templates or calendars',
+  },
+];
+
 /**
- * Format the AJV errors of a rejected manifest. The generic "must match a
- * schema in anyOf" the provider rule produces at the manifest root — with one
- * "must have required property" sibling per capability field — would not tell
- * the developer what to do: that cluster is collapsed into the explicit rule
- * (capabilities/provider-type.md).
+ * Format the AJV errors of a rejected manifest, the clusters of the explicit
+ * rules above collapsed into their message (reported last, once). The `if`
+ * errors of the other if/then rules ("must match \"then\" schema") are
+ * dropped: the error of the consequence they come with already says what is
+ * wrong.
  * @param {object[]} ajvErrors - Errors produced by AJV.
  * @returns {string[]} Human-readable reasons.
  */
 function formatAjvErrors(ajvErrors) {
-  const providerRule = ajvErrors.find((ajvError) => ajvError.keyword === 'anyOf' && ajvError.instancePath === '');
-  if (providerRule === undefined) {
-    return ajvErrors.map(formatAjvError);
-  }
-  // The rule is an if/then at the manifest root: the `if` error, the `anyOf`
-  // error and its `required` siblings all live under that allOf entry.
-  const clusterPath = `${providerRule.schemaPath.slice(0, providerRule.schemaPath.indexOf('/then/anyOf'))}/`;
-  return [
-    ...ajvErrors.filter((ajvError) => !ajvError.schemaPath.startsWith(clusterPath)).map(formatAjvError),
-    `manifest.type: a provider integration must declare at least one capability field` +
-      ` (${CAPABILITY_MANIFEST_FIELDS.join(', ')})`,
-  ];
+  const explicit = [];
+  const remaining = ajvErrors.filter((ajvError) => {
+    if (ajvError.keyword === 'if') {
+      return false;
+    }
+    const rule = EXPLICIT_SCHEMA_RULES.find(({ clusterPath }) => ajvError.schemaPath.startsWith(clusterPath));
+    if (rule === undefined) {
+      return true;
+    }
+    if (!explicit.includes(rule.message)) {
+      explicit.push(rule.message);
+    }
+    return false;
+  });
+  return [...remaining.map(formatAjvError), ...explicit];
 }
 
 /**
@@ -389,13 +421,34 @@ function validateSceneDeclarationRules(declarations, listName, context) {
 }
 
 /**
+ * Every flat list of config fields a manifest declares, whatever the form
+ * rendering it: the config, contact and account schemas, the action mini
+ * forms, the widget settings and the scene trigger / action fields.
+ * @param {object} manifest - Schema-validated manifest.
+ * @returns {object[]} The config fields, flattened.
+ */
+function collectConfigFields(manifest) {
+  return [
+    ...(manifest.config_schema ?? []),
+    ...(manifest.contact_schema ?? []),
+    ...(manifest.account_schema ?? []),
+    ...(manifest.actions ?? []).flatMap((action) => action.fields ?? []),
+    ...(manifest.widgets ?? []).flatMap((widget) => widget.settings ?? []),
+    ...Object.keys(SCENE_DECLARATION_LISTS).flatMap((listName) =>
+      (manifest[listName] ?? []).flatMap((declaration) => declaration.fields ?? []),
+    ),
+  ];
+}
+
+/**
  * Compatibility gate of the manifest additions: older Gladys releases
- * validate manifests with a strict field allowlist (and a closed `type` enum)
- * and reject any unknown field or type at install/update time. A manifest
- * declaring one of them must therefore require a range no older core
- * satisfies, which turns a cryptic install failure on old instances into the
- * standard "requires Gladys ≥ X" catalog filter. Only meaningful on a valid
- * range: an invalid `gladys_version` is already reported on its own.
+ * validate manifests with a strict field allowlist (a closed `type` enum, a
+ * closed dynamic `source` enum) and reject any unknown field, type or source
+ * at install/update time. A manifest declaring one of them must therefore
+ * require a range no older core satisfies, which turns a cryptic install
+ * failure on old instances into the standard "requires Gladys ≥ X" catalog
+ * filter. Only meaningful on a valid range: an invalid `gladys_version` is
+ * already reported on its own.
  * @param {object} manifest - Schema-validated manifest with a valid gladys_version range.
  * @returns {string[]} Reasons, empty when valid.
  */
@@ -418,15 +471,25 @@ function validateGladysVersionGates(manifest) {
       );
     }
   });
+  const declaredSources = new Set(collectConfigFields(manifest).map((field) => field.source));
+  Object.entries(CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION).forEach(([source, sourceMinimum]) => {
+    if (declaredSources.has(source) && !satisfies(sourceMinimum)) {
+      errors.push(
+        `manifest.gladys_version: declaring source "${source}" requires ">=${sourceMinimum}" at minimum` +
+          ` (older Gladys releases reject a dynamic source they do not know)`,
+      );
+    }
+  });
   return errors;
 }
 
 /**
  * Validate an integration manifest: JSON Schema first, then the rules the
  * schema cannot express (strict semver, semver range and its compatibility
- * gates, image references, config_schema/contact_schema/containers/actions/
- * webhooks/widgets/scene declarations consistency, sub-container port name
- * uniqueness and {{port:<name>}} placeholder references).
+ * gates, image references, config_schema/contact_schema/account_schema/
+ * containers/actions/webhooks/widgets/scene declarations/energy_contracts
+ * consistency, sub-container port name uniqueness and {{port:<name>}}
+ * placeholder references).
  * Indexer and Gladys server apply the same rules.
  * @param {*} manifest - Parsed content of gladys-assistant-integration.json.
  * @returns {{valid: boolean, errors: string[]}} Validation result.
@@ -482,6 +545,17 @@ export function validateManifest(manifest) {
       }),
     );
   }
+  // The per-user account form of a calendar integration
+  // (capabilities/calendar-type.md) is the same per-user block as the contact
+  // schema, with the same rules.
+  if (manifest.account_schema !== undefined) {
+    errors.push(
+      ...validateConfigSchemaRules(manifest.account_schema, 'manifest.account_schema', {
+        declaredPortNames,
+        portPlaceholdersUnavailableIn: 'the per-user account schema',
+      }),
+    );
+  }
   if (manifest.containers !== undefined) {
     errors.push(...validateSubContainerRules(manifest.containers));
   }
@@ -499,6 +573,9 @@ export function validateManifest(manifest) {
       errors.push(...validateSceneDeclarationRules(manifest[listName], listName, adminContext));
     }
   });
+  if (manifest.energy_contracts !== undefined) {
+    errors.push(...validateEnergyContractsRules(manifest.energy_contracts));
+  }
 
   return { valid: errors.length === 0, errors };
 }
