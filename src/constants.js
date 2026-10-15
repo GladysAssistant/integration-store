@@ -105,6 +105,19 @@ export const CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION = {
   // the houses of Gladys, by selector
   houses: '5.2.0',
 };
+// Same gate for the properties of a config field added after the first
+// release: an older core rejects a field carrying an unknown property with
+// "unknown field". `credential_keys`: the off-schema keys an account field
+// declares, the only ones a disconnect deletes (contracts/manifest.md C.1).
+// TODO: set to the first Gladys release shipping GladysAssistant/Gladys#2719.
+export const CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION = {
+  credential_keys: '5.2.2',
+};
+// Every service-scoped variable the Gladys core stores next to the config of
+// an integration starts with this prefix: an account field may not declare
+// such a key as a credential key (a prefix, so a core variable added later is
+// protected too).
+export const CORE_SERVICE_VARIABLE_PREFIX = 'EXTERNAL_INTEGRATION_';
 
 // The capability fields (capabilities/provider-type.md): contracts the core
 // does not consume through a dedicated interface, declarable by every type on

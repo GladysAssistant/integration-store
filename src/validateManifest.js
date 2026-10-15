@@ -6,7 +6,9 @@ import semver from 'semver';
 
 import {
   CAPABILITY_MANIFEST_FIELDS,
+  CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION,
   CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION,
+  CORE_SERVICE_VARIABLE_PREFIX,
   MANIFEST_FIELD_MIN_GLADYS_VERSION,
   MANIFEST_TYPE_MIN_GLADYS_VERSION,
   SUPPORTED_MANIFEST_VERSION,
@@ -215,6 +217,64 @@ function validateConfigSchemaRules(configSchema, basePath, context) {
       errors.push(...validateSectionPortPlaceholders(field, path, context));
     }
   });
+  errors.push(...validateCredentialKeysRules(configSchema, basePath));
+  return errors;
+}
+
+/**
+ * Rules of the `credential_keys` of the account fields the schema cannot
+ * express: a key stored next to the user preferences or the core's own
+ * variables, a key the user fills in the form (a setting, never a
+ * credential) and a key owned by two account fields (one disconnect would
+ * log the other account out) are refused.
+ * @param {object[]} configSchema - Flat list of config fields.
+ * @param {string} basePath - Dotted path of the list, for error messages.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateCredentialKeysRules(configSchema, basePath) {
+  const errors = [];
+  const schemaKeys = configSchema.map((field) => field.key);
+  const owners = new Map();
+  configSchema.forEach((field, i) => {
+    (field.credential_keys ?? []).forEach((key, keyIndex) => {
+      const path = `${basePath}.${i}.credential_keys.${keyIndex}`;
+      const storedName = key.toUpperCase();
+      if (storedName.startsWith('GLADYS_') || storedName.startsWith(CORE_SERVICE_VARIABLE_PREFIX)) {
+        errors.push(`${path}: "${key}" is reserved`);
+      } else if (schemaKeys.includes(key)) {
+        errors.push(`${path}: "${key}" is a config_schema key`);
+      } else if (owners.has(key)) {
+        errors.push(`${path}: "${key}" is already a credential key of ${owners.get(key)}`);
+      } else {
+        owners.set(key, field.key);
+      }
+    });
+  });
+  return errors;
+}
+
+/**
+ * `credential_keys` only means something on the config_schema account fields:
+ * Gladys disconnects those, and refuses the list anywhere else (an action mini
+ * form, a widget setting, a scene field, the contact or account schema).
+ * @param {object} manifest - Schema-validated manifest.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function rejectCredentialKeysOutsideConfigSchema(manifest) {
+  const errors = [];
+  const check = (fields, basePath) =>
+    (fields ?? []).forEach((field, i) => {
+      if (field.credential_keys !== undefined) {
+        errors.push(`${basePath}.${i}.credential_keys: only allowed on config_schema fields`);
+      }
+    });
+  check(manifest.contact_schema, 'manifest.contact_schema');
+  check(manifest.account_schema, 'manifest.account_schema');
+  (manifest.actions ?? []).forEach((action, i) => check(action.fields, `manifest.actions.${i}.fields`));
+  (manifest.widgets ?? []).forEach((widget, i) => check(widget.settings, `manifest.widgets.${i}.settings`));
+  Object.keys(SCENE_DECLARATION_LISTS).forEach((listName) =>
+    (manifest[listName] ?? []).forEach((entry, i) => check(entry.fields, `manifest.${listName}.${i}.fields`)),
+  );
   return errors;
 }
 
@@ -480,6 +540,15 @@ function validateGladysVersionGates(manifest) {
       );
     }
   });
+  Object.entries(CONFIG_FIELD_PROPERTY_MIN_GLADYS_VERSION).forEach(([property, propertyMinimum]) => {
+    const declared = (manifest.config_schema ?? []).some((field) => field[property] !== undefined);
+    if (declared && !satisfies(propertyMinimum)) {
+      errors.push(
+        `manifest.gladys_version: declaring ${property} on a config_schema field requires ` +
+          `">=${propertyMinimum}" at minimum (older Gladys releases reject config fields carrying unknown properties)`,
+      );
+    }
+  });
   return errors;
 }
 
@@ -535,6 +604,7 @@ export function validateManifest(manifest) {
   if (manifest.config_schema !== undefined) {
     errors.push(...validateConfigSchemaRules(manifest.config_schema, 'manifest.config_schema', adminContext));
   }
+  errors.push(...rejectCredentialKeysOutsideConfigSchema(manifest));
   // The per-user identity fields of a send-only channel share the flat config
   // field format (contract B.15), so they share its code rules too.
   if (manifest.contact_schema !== undefined) {
