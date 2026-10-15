@@ -28,6 +28,12 @@ function contentTypeFor(key) {
 }
 
 /**
+ * Documents rebuilt on every crawl: the index, its lite projection and the
+ * rejection list.
+ */
+const CRAWL_DOCUMENT_KEYS = new Set(['index.json', 'index-lite.json', 'rejected.json']);
+
+/**
  * Cache-Control to publish a file with. The index and rejection documents are
  * rebuilt on every crawl, so they get a short TTL; documentation pages keep a
  * stable URL but their content follows the repository, so they get a medium
@@ -36,7 +42,7 @@ function contentTypeFor(key) {
  * @returns {string} Cache-Control header value.
  */
 function cacheControlFor(key) {
-  if (key === 'index.json' || key === 'rejected.json') {
+  if (CRAWL_DOCUMENT_KEYS.has(key)) {
     return 'public, max-age=300';
   }
   if (key.startsWith('docs/')) {
@@ -139,7 +145,7 @@ export function createR2HeadObject({ client, bucket }) {
  * @returns {boolean} True if the object must be re-uploaded unconditionally.
  */
 function isAlwaysUpload(key) {
-  return key === 'index.json' || key === 'rejected.json';
+  return CRAWL_DOCUMENT_KEYS.has(key);
 }
 
 /**
@@ -166,8 +172,9 @@ function etagMatches(etag, body) {
  * index/rejection documents) are only re-uploaded if their remote ETag differs
  * from the local bytes. Covers change almost never, so this turns the dominant,
  * per-integration write cost into a one-off: at steady state a crawl re-writes
- * just index.json and rejected.json instead of every cover, keeping the write
- * volume (Class A on R2) roughly constant regardless of the store size.
+ * just the three crawl documents (index.json, index-lite.json and
+ * rejected.json) instead of every cover, keeping the write volume (Class A on
+ * R2) roughly constant regardless of the store size.
  *
  * Objects are only ever PUT, never deleted: the freshly written
  * index.json/rejected.json always reference the current covers, so leftover

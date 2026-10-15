@@ -128,6 +128,7 @@ describe('uploadDirectory', () => {
     dir = await mkdtemp(path.join(os.tmpdir(), 'integration-store-upload-'));
     await mkdir(path.join(dir, 'covers'), { recursive: true });
     await writeFile(path.join(dir, 'index.json'), '{"index_format":1}');
+    await writeFile(path.join(dir, 'index-lite.json'), '{"index_format":1}');
     await writeFile(path.join(dir, 'rejected.json'), '[]');
     await writeFile(path.join(dir, 'manifest.schema.json'), '{"$id":"schema"}');
     await writeFile(path.join(dir, 'covers', 'placeholder.png'), Buffer.from('png-bytes'));
@@ -156,6 +157,7 @@ describe('uploadDirectory', () => {
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
+      'index-lite.json',
       'index.json',
       'manifest.schema.json',
       'rejected.json',
@@ -164,6 +166,7 @@ describe('uploadDirectory', () => {
 
     const byKey = Object.fromEntries(uploads.map((u) => [u.key, u]));
     expect(byKey['index.json'].contentType).to.equal('application/json');
+    expect(byKey['index-lite.json'].contentType).to.equal('application/json');
     expect(byKey['rejected.json'].contentType).to.equal('application/json');
     expect(byKey['manifest.schema.json'].contentType).to.equal('application/json');
     expect(byKey['covers/placeholder.png'].contentType).to.equal('image/png');
@@ -186,6 +189,7 @@ describe('uploadDirectory', () => {
 
     const byKey = Object.fromEntries(uploads.map((u) => [u.key, u]));
     expect(byKey['index.json'].cacheControl).to.equal('public, max-age=300');
+    expect(byKey['index-lite.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['rejected.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['manifest.schema.json'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['covers/john--demo.jpg'].cacheControl).to.equal('public, max-age=86400');
@@ -235,6 +239,7 @@ describe('uploadDirectory', () => {
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
+      'index-lite.json',
       'index.json',
       'manifest.schema.json',
       'rejected.json',
@@ -242,6 +247,7 @@ describe('uploadDirectory', () => {
     expect(uploads).to.deep.equal(uploaded);
     // The mutable index documents are re-uploaded without a HEAD probe.
     expect(headCalls).to.not.include('index.json');
+    expect(headCalls).to.not.include('index-lite.json');
     expect(headCalls).to.not.include('rejected.json');
     expect(headCalls).to.include('manifest.schema.json');
   });

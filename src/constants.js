@@ -123,3 +123,21 @@ export const REJECTION_LEVELS = {
   // The integration IS indexed, with a degradation (e.g. placeholder cover).
   WARNING: 'warning',
 };
+
+// The manifest fields kept by index-lite.json: what a consumer that only
+// lists the catalog (the website, a search page) needs to present and filter
+// an integration. Everything else — the install-time contracts (config_schema,
+// account_schema, widgets, scene triggers and actions, energy contracts…),
+// which weigh most of index.json — stays in index.json only. An allowlist on
+// purpose: a field added to the manifest contract later does not inflate the
+// lite index unless it is listed here.
+export const LITE_INDEX_MANIFEST_FIELDS = [
+  'manifest_version',
+  'type',
+  'name',
+  'description',
+  'version',
+  'docker_image',
+  'gladys_version',
+  'transports',
+];
