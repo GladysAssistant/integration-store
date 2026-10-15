@@ -2,6 +2,7 @@ import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { buildLiteIndex } from './buildLiteIndex.js';
 import { PLACEHOLDER_COVER_FILE_NAME } from './constants.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -19,7 +20,8 @@ function toJson(value) {
 }
 
 /**
- * Write everything the store publishes: index.json, rejected.json, the
+ * Write everything the store publishes: index.json, its lighter projection
+ * index-lite.json (derived here, so the two never drift), rejected.json, the
  * canonical manifest.schema.json and widget-content.schema.json (the two
  * schemas this repository owns for the whole ecosystem), the re-hosted
  * covers (and the placeholder) and the re-hosted documentation files.
@@ -36,6 +38,7 @@ export async function writeOutput({ outputDir, index, rejected, coverFiles, docs
   await mkdir(coversDir, { recursive: true });
 
   await writeFile(path.join(outputDir, 'index.json'), toJson(index));
+  await writeFile(path.join(outputDir, 'index-lite.json'), toJson(buildLiteIndex(index)));
   await writeFile(path.join(outputDir, 'rejected.json'), toJson(rejected));
   await copyFile(CANONICAL_SCHEMA_PATH, path.join(outputDir, 'manifest.schema.json'));
   await copyFile(WIDGET_CONTENT_SCHEMA_PATH, path.join(outputDir, 'widget-content.schema.json'));
