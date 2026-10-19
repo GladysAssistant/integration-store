@@ -1,0 +1,18 @@
+# Code owners of the integration store.
+#
+# The last matching pattern wins. When a pattern lists several owners, the
+# approval of any one of them is enough.
+#
+# Enforced only when the `main` branch protection enables "Require review from
+# Code Owners"; every team listed here needs write access to the repository.
+
+# Everything — the validation code, the JSON schemas, the workflows, the README
+# (which documents the store definition) and this file — is owned by the
+# maintainers.
+* @GladysAssistant/maintainers
+
+# Store data: the core team can review and merge blocklist changes (see
+# "Moderation: the blocklist" in the README) and the fallback browse categories.
+# Their format stays enforced by the code and the tests above.
+/data/blocklist.json @GladysAssistant/maintainers @GladysAssistant/core
+/data/category-fallback.json @GladysAssistant/maintainers @GladysAssistant/core
