@@ -11,6 +11,8 @@
 # maintainers.
 * @GladysAssistant/maintainers
 
-# Moderation: the core team can review and merge blocklist changes
-# (see "Moderation: the blocklist" in the README).
+# Store data: the core team can review and merge blocklist changes (see
+# "Moderation: the blocklist" in the README) and the fallback browse categories.
+# Their format stays enforced by the code and the tests above.
 /data/blocklist.json @GladysAssistant/maintainers @GladysAssistant/core
+/data/category-fallback.json @GladysAssistant/maintainers @GladysAssistant/core
