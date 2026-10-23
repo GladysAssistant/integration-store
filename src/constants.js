@@ -147,6 +147,15 @@ export const CAPABILITY_MANIFEST_FIELDS = ['widgets', 'scene_triggers', 'scene_a
 // hang the whole indexing run.
 export const REQUEST_TIMEOUT_MS = 30 * 1000;
 
+// Number of repositories indexed at the same time. A crawl is almost only
+// network latency, so a handful of repositories in flight divides its
+// duration accordingly, while staying a polite load for raw.githubusercontent
+// and the registries (each repository is still a few sequential requests).
+export const INDEX_CONCURRENCY = 8;
+// Number of objects uploaded to the bucket at the same time: below the
+// 50 sockets the S3 client keeps alive per host.
+export const UPLOAD_CONCURRENCY = 16;
+
 export const REJECTION_LEVELS = {
   // The integration is NOT indexed.
   ERROR: 'error',

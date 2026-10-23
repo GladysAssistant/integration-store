@@ -5,6 +5,7 @@ import {
   DOCS_LANGUAGES,
   DOCS_OPTIONAL_LANGUAGES,
   DOCS_MIN_CHARS,
+  INDEX_CONCURRENCY,
   INDEX_FORMAT,
   INTEGRATIONS_DIR_NAME,
   MANIFEST_FILE_NAME,
@@ -13,6 +14,7 @@ import {
   docsFilePath,
   integrationEntryFileName,
 } from './constants.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 import { validateCover } from './validateCover.js';
 import { validateManifest } from './validateManifest.js';
 
@@ -168,15 +170,161 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
 }
 
 /**
+ * Index one repository: skip it when blocked, fetch its manifest, validate it
+ * (schema + code rules), check the mandatory user documentation
+ * (docs/en.md + docs/fr.md, re-hosted, plus the optional languages when
+ * present), check that the Docker images (main and sub-containers) actually
+ * exist on their registry, validate and re-host the cover, and resolve the
+ * catalog fields of its entry. It touches no shared state, so buildIndex can
+ * index many repositories concurrently and merge them in store_slug order.
+ * @param {object} repository - Repository entry.
+ * @param {object} context - The buildIndex options, defaults applied, plus `previousEntries` (previous index entries by store_slug).
+ * @returns {Promise<{rejected: object[], integration: object|null, coverFile: {fileName: string, data: Buffer}|null, docsFiles: {fileName: string, data: Buffer}[]}>} The rejected.json entries of the repository, and its index entry and files to publish (null and empty when it is not indexed).
+ */
+async function indexRepository(
+  repository,
+  {
+    fetchManifestFile,
+    fetchDocFile,
+    checkDockerImage,
+    downloadCover,
+    storeBaseUrl,
+    now,
+    categoryFallback,
+    categoryAdditions,
+    countryFallback,
+    previousIndex,
+    previousEntries,
+    blocklist,
+  },
+) {
+  const rejected = [];
+  const excluded = () => ({ rejected, integration: null, coverFile: null, docsFiles: [] });
+  const reject = (level, reason) => {
+    rejected.push({ store_slug: repository.storeSlug, level, reason, checked_at: now });
+  };
+
+  // Blocklist (README § Moderation): a blocked repository is skipped before
+  // any fetch — nothing of it (manifest, docs, cover, registry) is read,
+  // let alone re-hosted — and the exclusion is published, auditable, in
+  // rejected.json.
+  const blocked = findBlocklistEntry({ storeSlug: repository.storeSlug, owner: repository.owner, blocklist });
+  if (blocked !== null) {
+    reject(REJECTION_LEVELS.ERROR, blocklistRejectionReason(blocked));
+    return excluded();
+  }
+
+  const { manifest, rejectionReason } = await resolveManifest(repository, fetchManifestFile);
+  if (rejectionReason !== undefined) {
+    reject(REJECTION_LEVELS.ERROR, rejectionReason);
+    return excluded();
+  }
+
+  const validation = validateManifest(manifest);
+  if (!validation.valid) {
+    reject(REJECTION_LEVELS.ERROR, validation.errors.join('; '));
+    return excluded();
+  }
+
+  // Mandatory user documentation (B.9): absent or too small → rejection;
+  // an optional language that is present but unsound → warning. The fine
+  // structure of the files (template sections) stays conventional.
+  const {
+    docs,
+    docsFiles,
+    warnings: docsWarnings,
+    rejectionReason: docsRejectionReason,
+  } = await resolveDocs(repository, fetchDocFile, storeBaseUrl);
+  if (docsRejectionReason !== undefined) {
+    reject(REJECTION_LEVELS.ERROR, docsRejectionReason);
+    return excluded();
+  }
+  docsWarnings.forEach((docsWarning) => reject(REJECTION_LEVELS.WARNING, docsWarning));
+
+  // A definitive registry verdict (image missing, not anonymously pullable)
+  // rejects the integration: a catalog entry must have an image at the end —
+  // the sub-container images follow the exact same rule. A transient registry
+  // failure must not evict an integration that may already be published: it
+  // is indexed with a warning instead.
+  const imageReferences = [
+    { path: 'docker_image', reference: manifest.docker_image },
+    ...(manifest.containers ?? []).map((container, i) => ({
+      path: `containers.${i}.docker_image`,
+      reference: container.docker_image,
+    })),
+  ];
+  let missingImage = false;
+  for (const { path, reference } of imageReferences) {
+    const imageCheck = await checkDockerImage({ reference });
+    if (imageCheck.status === 'error') {
+      reject(REJECTION_LEVELS.ERROR, `${path}: ${imageCheck.reason}`);
+      missingImage = true;
+      break;
+    }
+    if (imageCheck.status === 'unverified') {
+      reject(REJECTION_LEVELS.WARNING, `${path}: ${imageCheck.reason} — indexed without image verification`);
+    }
+  }
+  if (missingImage) {
+    return excluded();
+  }
+
+  const { coverUrl, coverFile, warning } = await resolveCover(repository, manifest, downloadCover, storeBaseUrl);
+  if (warning !== null) {
+    reject(REJECTION_LEVELS.WARNING, warning);
+  }
+
+  // Browse categories, resolved at the index level so the whole catalog is
+  // categorized without waiting for authors to republish: manifest value
+  // (filtered against the vocabulary), else fallback mapping, else
+  // uncategorized — each degradation surfaced as an author-facing warning.
+  // The manifest itself is published verbatim (unknown keys kept): each
+  // Gladys core re-filters against the vocabulary it knows at install time.
+  const { categories, warnings: categoryWarnings } = resolveCategories({
+    manifest,
+    storeSlug: repository.storeSlug,
+    categoryFallback,
+    categoryAdditions,
+  });
+  categoryWarnings.forEach((categoryWarning) => reject(REJECTION_LEVELS.WARNING, categoryWarning));
+
+  // Countries the integration is usable in, resolved at the index level
+  // like the categories (manifest, else fallback mapping, else worldwide):
+  // the country filter of the Gladys catalog reads this field.
+  const countries = resolveCountries({ manifest, storeSlug: repository.storeSlug, countryFallback });
+
+  // `entry_url` points at the per-integration copy of this very entry
+  // (written by writeOutput): what a consumer of index-lite.json downloads
+  // at install time to get the full manifest, instead of the whole index.
+  const integration = {
+    store_slug: repository.storeSlug,
+    repo_url: repository.repoUrl,
+    entry_url: `${storeBaseUrl}/${INTEGRATIONS_DIR_NAME}/${integrationEntryFileName(repository.storeSlug)}`,
+    manifest,
+    cover_url: coverUrl,
+    docs,
+    github: {
+      stars: repository.stars,
+      pushed_at: repository.pushedAt,
+      owner_avatar_url: repository.ownerAvatarUrl,
+    },
+    categories,
+    countries,
+    first_seen_at: resolveFirstSeenAt(repository, previousIndex, previousEntries, now),
+  };
+
+  return { rejected, integration, coverFile, docsFiles };
+}
+
+/**
  * Build the store index from the repositories tagged with the store topic:
- * skip the blocked ones (data/blocklist.json), fetch each manifest, validate
- * it (schema + code rules), check the mandatory
- * user documentation (docs/en.md + docs/fr.md, re-hosted, plus the optional
- * languages when present), check that the
- * Docker images (main and sub-containers) actually exist on their registry,
- * validate and re-host each cover, and produce the deterministic
- * index.json / rejected.json contents
- * (C.6) plus the cover and documentation files to publish.
+ * index each of them (indexRepository) and produce the deterministic
+ * index.json / rejected.json contents (C.6) plus the cover and documentation
+ * files to publish. Nearly all the time of a crawl is network latency
+ * (raw.githubusercontent, registries, cover hosts), so the repositories are
+ * indexed `concurrency` at a time instead of one request after the other,
+ * then merged in store_slug order: the output never depends on which request
+ * answers first.
  * @param {object} options - Options.
  * @param {object[]} options.repositories - Output of searchRepositoriesByTopic.
  * @param {Function} options.fetchManifestFile - Manifest fetcher (injectable for tests).
@@ -190,6 +338,7 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
  * @param {object} [options.countryFallback] - Map of store_slug → fallback countries (data/country-fallback.json).
  * @param {object|null} options.previousIndex - Index published by the previous crawl (first_seen_at continuity), null when none exists yet.
  * @param {{repositories: object, owners: object}} [options.blocklist] - Blocked repositories and owners (data/blocklist.json).
+ * @param {number} [options.concurrency] - Number of repositories indexed at the same time.
  * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[], docsFiles: {fileName: string, data: Buffer}[]}>} Build result.
  */
 export async function buildIndex({
@@ -205,138 +354,35 @@ export async function buildIndex({
   countryFallback = {},
   previousIndex = null,
   blocklist = EMPTY_BLOCKLIST,
+  concurrency = INDEX_CONCURRENCY,
 }) {
-  const integrations = [];
-  const rejected = [];
-  const coverFiles = [];
-  const allDocsFiles = [];
-  const previousEntries = new Map((previousIndex?.integrations ?? []).map((entry) => [entry.store_slug, entry]));
-
+  const context = {
+    fetchManifestFile,
+    fetchDocFile,
+    checkDockerImage,
+    downloadCover,
+    storeBaseUrl,
+    now,
+    categoryFallback,
+    categoryAdditions,
+    countryFallback,
+    previousIndex,
+    previousEntries: new Map((previousIndex?.integrations ?? []).map((entry) => [entry.store_slug, entry])),
+    blocklist,
+  };
   const sortedRepositories = [...repositories].sort((a, b) => a.storeSlug.localeCompare(b.storeSlug));
-
-  for (const repository of sortedRepositories) {
-    const reject = (level, reason) => {
-      rejected.push({ store_slug: repository.storeSlug, level, reason, checked_at: now });
-    };
-
-    // Blocklist (README § Moderation): a blocked repository is skipped before
-    // any fetch — nothing of it (manifest, docs, cover, registry) is read,
-    // let alone re-hosted — and the exclusion is published, auditable, in
-    // rejected.json.
-    const blocked = findBlocklistEntry({ storeSlug: repository.storeSlug, owner: repository.owner, blocklist });
-    if (blocked !== null) {
-      reject(REJECTION_LEVELS.ERROR, blocklistRejectionReason(blocked));
-      continue;
-    }
-
-    const { manifest, rejectionReason } = await resolveManifest(repository, fetchManifestFile);
-    if (rejectionReason !== undefined) {
-      reject(REJECTION_LEVELS.ERROR, rejectionReason);
-      continue;
-    }
-
-    const validation = validateManifest(manifest);
-    if (!validation.valid) {
-      reject(REJECTION_LEVELS.ERROR, validation.errors.join('; '));
-      continue;
-    }
-
-    // Mandatory user documentation (B.9): absent or too small → rejection;
-    // an optional language that is present but unsound → warning. The fine
-    // structure of the files (template sections) stays conventional.
-    const {
-      docs,
-      docsFiles,
-      warnings: docsWarnings,
-      rejectionReason: docsRejectionReason,
-    } = await resolveDocs(repository, fetchDocFile, storeBaseUrl);
-    if (docsRejectionReason !== undefined) {
-      reject(REJECTION_LEVELS.ERROR, docsRejectionReason);
-      continue;
-    }
-    docsWarnings.forEach((docsWarning) => reject(REJECTION_LEVELS.WARNING, docsWarning));
-
-    // A definitive registry verdict (image missing, not anonymously pullable)
-    // rejects the integration: a catalog entry must have an image at the end —
-    // the sub-container images follow the exact same rule. A transient registry
-    // failure must not evict an integration that may already be published: it
-    // is indexed with a warning instead.
-    const imageReferences = [
-      { path: 'docker_image', reference: manifest.docker_image },
-      ...(manifest.containers ?? []).map((container, i) => ({
-        path: `containers.${i}.docker_image`,
-        reference: container.docker_image,
-      })),
-    ];
-    let missingImage = false;
-    for (const { path, reference } of imageReferences) {
-      const imageCheck = await checkDockerImage({ reference });
-      if (imageCheck.status === 'error') {
-        reject(REJECTION_LEVELS.ERROR, `${path}: ${imageCheck.reason}`);
-        missingImage = true;
-        break;
-      }
-      if (imageCheck.status === 'unverified') {
-        reject(REJECTION_LEVELS.WARNING, `${path}: ${imageCheck.reason} — indexed without image verification`);
-      }
-    }
-    if (missingImage) {
-      continue;
-    }
-
-    const { coverUrl, coverFile, warning } = await resolveCover(repository, manifest, downloadCover, storeBaseUrl);
-    if (warning !== null) {
-      reject(REJECTION_LEVELS.WARNING, warning);
-    }
-    if (coverFile !== null) {
-      coverFiles.push(coverFile);
-    }
-    allDocsFiles.push(...docsFiles);
-
-    // Browse categories, resolved at the index level so the whole catalog is
-    // categorized without waiting for authors to republish: manifest value
-    // (filtered against the vocabulary), else fallback mapping, else
-    // uncategorized — each degradation surfaced as an author-facing warning.
-    // The manifest itself is published verbatim (unknown keys kept): each
-    // Gladys core re-filters against the vocabulary it knows at install time.
-    const { categories, warnings: categoryWarnings } = resolveCategories({
-      manifest,
-      storeSlug: repository.storeSlug,
-      categoryFallback,
-      categoryAdditions,
-    });
-    categoryWarnings.forEach((categoryWarning) => reject(REJECTION_LEVELS.WARNING, categoryWarning));
-
-    // Countries the integration is usable in, resolved at the index level
-    // like the categories (manifest, else fallback mapping, else worldwide):
-    // the country filter of the Gladys catalog reads this field.
-    const countries = resolveCountries({ manifest, storeSlug: repository.storeSlug, countryFallback });
-
-    // `entry_url` points at the per-integration copy of this very entry
-    // (written by writeOutput): what a consumer of index-lite.json downloads
-    // at install time to get the full manifest, instead of the whole index.
-    integrations.push({
-      store_slug: repository.storeSlug,
-      repo_url: repository.repoUrl,
-      entry_url: `${storeBaseUrl}/${INTEGRATIONS_DIR_NAME}/${integrationEntryFileName(repository.storeSlug)}`,
-      manifest,
-      cover_url: coverUrl,
-      docs,
-      github: {
-        stars: repository.stars,
-        pushed_at: repository.pushedAt,
-        owner_avatar_url: repository.ownerAvatarUrl,
-      },
-      categories,
-      countries,
-      first_seen_at: resolveFirstSeenAt(repository, previousIndex, previousEntries, now),
-    });
-  }
+  const results = await mapWithConcurrency(sortedRepositories, concurrency, (repository) =>
+    indexRepository(repository, context),
+  );
 
   return {
-    index: { index_format: INDEX_FORMAT, generated_at: now, integrations },
-    rejected,
-    coverFiles,
-    docsFiles: allDocsFiles,
+    index: {
+      index_format: INDEX_FORMAT,
+      generated_at: now,
+      integrations: results.flatMap((result) => (result.integration === null ? [] : [result.integration])),
+    },
+    rejected: results.flatMap((result) => result.rejected),
+    coverFiles: results.flatMap((result) => (result.coverFile === null ? [] : [result.coverFile])),
+    docsFiles: results.flatMap((result) => result.docsFiles),
   };
 }
