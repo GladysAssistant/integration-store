@@ -1,6 +1,7 @@
 import { loadBlocklist } from './blocklist.js';
 import { buildIndex } from './buildIndex.js';
-import { loadCategoryFallback } from './categories.js';
+import { loadCategoryAdditions, loadCategoryFallback } from './categories.js';
+import { loadCountryFallback } from './countries.js';
 import { checkDockerImage } from './checkDockerImage.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchDocFile, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
@@ -35,6 +36,8 @@ const { index, rejected, coverFiles, docsFiles } = await buildIndex({
   storeBaseUrl,
   now: new Date().toISOString(),
   categoryFallback: loadCategoryFallback(),
+  categoryAdditions: loadCategoryAdditions(),
+  countryFallback: loadCountryFallback(),
   previousIndex,
   blocklist: loadBlocklist(),
 });

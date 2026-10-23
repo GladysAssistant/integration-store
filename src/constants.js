@@ -87,6 +87,13 @@ export const INTEGRATION_CATALOG_CATEGORIES = [
   'notifications',
   'assistants',
   'services',
+  // added when the store passed 750 integrations (integration-catalog-
+  // categories.md §3, forum topic 11228): four flat shelves carved out of the
+  // ones that had outgrown the screen
+  'transport',
+  'vehicles',
+  'servers',
+  'leisure',
 ];
 
 // Older Gladys releases validate manifests with a strict field allowlist and
@@ -98,6 +105,10 @@ export const INTEGRATION_CATALOG_CATEGORIES = [
 // §6.2, generalized to every later addition of the manifest contract).
 export const MANIFEST_FIELD_MIN_GLADYS_VERSION = {
   categories: '4.86.0',
+  // search-only keywords and countries of the catalog (integration-catalog-
+  // categories.md §4 and §6.2): the first release whose validator accepts them
+  keywords: '5.3.0',
+  countries: '5.3.0',
   // capability fields: dashboard widgets (capabilities/dashboard-widgets.md)
   // and scene triggers / actions (capabilities/scene-triggers-and-actions.md)
   widgets: '5.1.0',
@@ -159,4 +170,14 @@ export const LITE_INDEX_MANIFEST_FIELDS = [
   'docker_image',
   'gladys_version',
   'transports',
+  // read by the catalog search and the country filter of the Gladys catalog
+  // (integration-catalog-categories.md §4)
+  'keywords',
+  'countries',
 ];
+
+// Code rule of the `keywords` manifest field, on top of the schema shape:
+// each term is compared once trimmed and lowercased ("WiiM" and " wiim" are
+// the same term for a search that ignores case), and must still reach the
+// minimum length once trimmed. Same rule as the Gladys core validator.
+export const KEYWORD_MIN_LENGTH = 2;

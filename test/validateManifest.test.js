@@ -667,6 +667,96 @@ describe('validateManifest', () => {
     });
   });
 
+  describe('keywords and countries', () => {
+    /**
+     * A manifest whose gladys_version range admits the catalog fields.
+     * @returns {object} Manifest.
+     */
+    function buildCatalogManifest() {
+      const manifest = buildManifest();
+      manifest.gladys_version = '>=5.3.0';
+      return manifest;
+    }
+
+    it('should accept valid keywords and countries', () => {
+      const manifest = buildCatalogManifest();
+      manifest.keywords = ['WiiM', 'Arylic', 'Audio Pro'];
+      manifest.countries = ['FR', 'BE'];
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a malformed keywords shape', () => {
+      for (const keywords of [[], ['a'], ['a'.repeat(31)], [42], ['WiiM', 'WiiM'], 'WiiM']) {
+        const manifest = buildCatalogManifest();
+        manifest.keywords = keywords;
+        const result = validateManifest(manifest);
+        expect(result.valid, JSON.stringify(keywords)).to.equal(false);
+        expect(result.errors.join(' '), JSON.stringify(keywords)).to.include('manifest.keywords');
+      }
+    });
+
+    it('should reject more than 10 keywords', () => {
+      const manifest = buildCatalogManifest();
+      manifest.keywords = Array.from({ length: 11 }, (_, i) => `term-${i}`);
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.keywords: must NOT have more than 10');
+    });
+
+    it('should reject keywords that are duplicates once trimmed and lowercased, or too short once trimmed', () => {
+      for (const keywords of [
+        ['WiiM', ' wiim '],
+        [' x ', 'yy'],
+      ]) {
+        const manifest = buildCatalogManifest();
+        manifest.keywords = keywords;
+        expect(validateManifest(manifest), JSON.stringify(keywords)).to.deep.equal({
+          valid: false,
+          errors: [
+            'manifest.keywords: terms must be unique once trimmed and lowercased, and at least 2 characters long' +
+              ' once trimmed',
+          ],
+        });
+      }
+    });
+
+    it('should reject a malformed countries declaration', () => {
+      for (const countries of [[], ['fr'], ['FRA'], ['F1'], ['FR', 'FR'], [42], 'FR']) {
+        const manifest = buildCatalogManifest();
+        manifest.countries = countries;
+        const result = validateManifest(manifest);
+        expect(result.valid, JSON.stringify(countries)).to.equal(false);
+        expect(result.errors.join(' '), JSON.stringify(countries)).to.include('manifest.countries');
+      }
+    });
+
+    it('should reject more than 20 countries', () => {
+      const manifest = buildCatalogManifest();
+      manifest.countries = Array.from(
+        { length: 21 },
+        (_, i) => `${String.fromCharCode(65 + (i % 26))}${String.fromCharCode(65 + Math.floor(i / 26))}`,
+      );
+      const result = validateManifest(manifest);
+      expect(result.valid).to.equal(false);
+      expect(result.errors.join(' ')).to.include('manifest.countries: must NOT have more than 20');
+    });
+
+    it('should reject keywords and countries on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildManifest();
+      manifest.keywords = ['WiiM'];
+      manifest.countries = ['FR'];
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.gladys_version: declaring keywords requires ">=5.3.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+          'manifest.gladys_version: declaring countries requires ">=5.3.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+        ],
+      });
+    });
+  });
+
   describe('transports', () => {
     it('should accept a single transport', () => {
       const manifest = buildManifest();

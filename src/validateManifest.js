@@ -7,6 +7,7 @@ import semver from 'semver';
 import {
   CAPABILITY_MANIFEST_FIELDS,
   CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION,
+  KEYWORD_MIN_LENGTH,
   MANIFEST_FIELD_MIN_GLADYS_VERSION,
   MANIFEST_TYPE_MIN_GLADYS_VERSION,
   SUPPORTED_MANIFEST_VERSION,
@@ -441,6 +442,26 @@ function collectConfigFields(manifest) {
 }
 
 /**
+ * Code rule of the `keywords` field (integration-catalog-categories.md §6.2),
+ * beyond the shape the schema already checked: a term is compared once
+ * trimmed and lowercased — "WiiM" and " wiim" are one term for a search that
+ * ignores case — and must still reach the minimum length once trimmed.
+ * @param {string[]} keywords - Schema-validated keywords.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateKeywordRules(keywords) {
+  const normalized = keywords.map((keyword) => keyword.trim().toLowerCase());
+  const tooShort = normalized.some((keyword) => keyword.length < KEYWORD_MIN_LENGTH);
+  if (tooShort || new Set(normalized).size !== normalized.length) {
+    return [
+      'manifest.keywords: terms must be unique once trimmed and lowercased, and at least' +
+        ` ${KEYWORD_MIN_LENGTH} characters long once trimmed`,
+    ];
+  }
+  return [];
+}
+
+/**
  * Compatibility gate of the manifest additions: older Gladys releases
  * validate manifests with a strict field allowlist (a closed `type` enum, a
  * closed dynamic `source` enum) and reject any unknown field, type or source
@@ -527,6 +548,9 @@ export function validateManifest(manifest) {
   }
   if (!isValidDockerImageReference(manifest.docker_image)) {
     errors.push('manifest.docker_image: must be a valid image reference with an explicit tag or digest');
+  }
+  if (manifest.keywords !== undefined) {
+    errors.push(...validateKeywordRules(manifest.keywords));
   }
   // Gathered first: the section texts of the config_schema and of the action
   // mini forms may reference these names with a {{port:<name>}} placeholder.

@@ -73,6 +73,16 @@ describe('buildLiteIndex', () => {
     });
   });
 
+  it('should keep the search keywords and the countries of a manifest declaring them', () => {
+    const regionalManifest = { ...validManifest, keywords: ['WiiM', 'Arylic'], countries: ['FR', 'BE'] };
+    const [regional] = buildLiteIndex({
+      ...index,
+      integrations: [entry('john/gladys-regional', regionalManifest)],
+    }).integrations;
+    expect(regional.manifest.keywords).to.deep.equal(['WiiM', 'Arylic']);
+    expect(regional.manifest.countries).to.deep.equal(['FR', 'BE']);
+  });
+
   it('should drop the install-time contracts of the manifest', () => {
     const [demo, provider] = buildLiteIndex(index).integrations;
     for (const field of ['config_schema', 'actions', 'containers', 'webhooks', 'cover_image', 'categories']) {
