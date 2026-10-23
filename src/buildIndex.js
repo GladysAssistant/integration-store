@@ -1,5 +1,6 @@
 import { EMPTY_BLOCKLIST, blocklistRejectionReason, findBlocklistEntry } from './blocklist.js';
 import { resolveCategories } from './categories.js';
+import { resolveCountries } from './countries.js';
 import {
   DOCS_LANGUAGES,
   DOCS_OPTIONAL_LANGUAGES,
@@ -185,6 +186,8 @@ function resolveFirstSeenAt(repository, previousIndex, previousEntries, now) {
  * @param {string} options.storeBaseUrl - Public base URL of the published store, no trailing slash.
  * @param {string} options.now - ISO 8601 timestamp of the crawl (injected: keeps the output deterministic).
  * @param {object} options.categoryFallback - Map of store_slug → fallback categories (data/category-fallback.json).
+ * @param {object} [options.categoryAdditions] - Map of store_slug → categories appended to the resolved ones (data/category-fallback.json).
+ * @param {object} [options.countryFallback] - Map of store_slug → fallback countries (data/country-fallback.json).
  * @param {object|null} options.previousIndex - Index published by the previous crawl (first_seen_at continuity), null when none exists yet.
  * @param {{repositories: object, owners: object}} [options.blocklist] - Blocked repositories and owners (data/blocklist.json).
  * @returns {Promise<{index: object, rejected: object[], coverFiles: {fileName: string, data: Buffer}[], docsFiles: {fileName: string, data: Buffer}[]}>} Build result.
@@ -198,6 +201,8 @@ export async function buildIndex({
   storeBaseUrl,
   now,
   categoryFallback = {},
+  categoryAdditions = {},
+  countryFallback = {},
   previousIndex = null,
   blocklist = EMPTY_BLOCKLIST,
 }) {
@@ -298,8 +303,14 @@ export async function buildIndex({
       manifest,
       storeSlug: repository.storeSlug,
       categoryFallback,
+      categoryAdditions,
     });
     categoryWarnings.forEach((categoryWarning) => reject(REJECTION_LEVELS.WARNING, categoryWarning));
+
+    // Countries the integration is usable in, resolved at the index level
+    // like the categories (manifest, else fallback mapping, else worldwide):
+    // the country filter of the Gladys catalog reads this field.
+    const countries = resolveCountries({ manifest, storeSlug: repository.storeSlug, countryFallback });
 
     // `entry_url` points at the per-integration copy of this very entry
     // (written by writeOutput): what a consumer of index-lite.json downloads
@@ -317,6 +328,7 @@ export async function buildIndex({
         owner_avatar_url: repository.ownerAvatarUrl,
       },
       categories,
+      countries,
       first_seen_at: resolveFirstSeenAt(repository, previousIndex, previousEntries, now),
     });
   }

@@ -19,6 +19,21 @@ export function loadCategoryFallback() {
 }
 
 /**
+ * Load the category additions maintained in this repository: the shelves
+ * added to the vocabulary after an integration was published (transport,
+ * vehicles, servers, leisure — integration-catalog-categories.md §3), keyed
+ * by store_slug. Unlike the fallback, an addition applies on top of the
+ * categories the manifest declares — a manifest can only name the shelves
+ * that existed when it was written, and the new shelves would stay empty
+ * until every author republishes. It never removes a declared key, and
+ * becomes redundant (then removable) once the author declares the key.
+ * @returns {object} Map of store_slug → categories array.
+ */
+export function loadCategoryAdditions() {
+  return JSON.parse(readFileSync(fallbackPath, 'utf8')).additions;
+}
+
+/**
  * Split a declared `categories` array between the keys of the controlled
  * vocabulary and the unknown ones. The vocabulary stage filters, never
  * rejects: an integration published with a newer vocabulary than a running
@@ -40,14 +55,31 @@ export function splitKnownCategories(categories) {
  * categories filtered against the controlled vocabulary, else the fallback
  * mapping entry of the store_slug, else [] — uncategorized, visible under
  * "All" and search only, with an author-facing warning (better shelf
- * placement is the author's incentive to declare the field).
+ * placement is the author's incentive to declare the field). The additions
+ * of the store_slug (shelves added to the vocabulary after the manifest was
+ * written) are then appended, never replacing a declared key.
+ * @param {object} options - Options.
+ * @param {object} options.manifest - Validated manifest.
+ * @param {string} options.storeSlug - store_slug of the integration.
+ * @param {object} options.categoryFallback - Map of store_slug → categories.
+ * @param {object} [options.categoryAdditions] - Map of store_slug → categories appended to the resolved ones.
+ * @returns {{categories: string[], warnings: string[]}} Resolved categories and author-facing warnings.
+ */
+export function resolveCategories({ manifest, storeSlug, categoryFallback, categoryAdditions = {} }) {
+  const { categories, warnings } = resolveDeclaredCategories({ manifest, storeSlug, categoryFallback });
+  const additions = (categoryAdditions[storeSlug] ?? []).filter((category) => !categories.includes(category));
+  return { categories: [...categories, ...additions], warnings };
+}
+
+/**
+ * The declared-or-fallback stage of resolveCategories, before the additions.
  * @param {object} options - Options.
  * @param {object} options.manifest - Validated manifest.
  * @param {string} options.storeSlug - store_slug of the integration.
  * @param {object} options.categoryFallback - Map of store_slug → categories.
  * @returns {{categories: string[], warnings: string[]}} Resolved categories and author-facing warnings.
  */
-export function resolveCategories({ manifest, storeSlug, categoryFallback }) {
+function resolveDeclaredCategories({ manifest, storeSlug, categoryFallback }) {
   const warnings = [];
   if (manifest.categories !== undefined) {
     const { known, unknown } = splitKnownCategories(manifest.categories);

@@ -1,6 +1,11 @@
 import { expect } from 'chai';
 
-import { loadCategoryFallback, resolveCategories, splitKnownCategories } from '../src/categories.js';
+import {
+  loadCategoryAdditions,
+  loadCategoryFallback,
+  resolveCategories,
+  splitKnownCategories,
+} from '../src/categories.js';
 import { INTEGRATION_CATALOG_CATEGORIES } from '../src/constants.js';
 
 describe('loadCategoryFallback', () => {
@@ -12,6 +17,24 @@ describe('loadCategoryFallback', () => {
       // Keyed by store_slug ("owner/repo"), never by display name.
       expect(slug, slug).to.match(/^[^/\s]+\/[^/\s]+$/);
       const categories = fallback[slug];
+      expect(categories, slug).to.be.an('array');
+      expect(categories.length, slug).to.be.within(1, 3);
+      expect(new Set(categories).size, slug).to.equal(categories.length);
+      for (const category of categories) {
+        expect(INTEGRATION_CATALOG_CATEGORIES, `${slug}: ${category}`).to.include(category);
+      }
+    }
+  });
+});
+
+describe('loadCategoryAdditions', () => {
+  it('should load a mapping of store_slug to 1-3 unique keys of the controlled vocabulary', () => {
+    const additions = loadCategoryAdditions();
+    const slugs = Object.keys(additions);
+    expect(slugs.length).to.be.greaterThan(0);
+    for (const slug of slugs) {
+      expect(slug, slug).to.match(/^[^/\s]+\/[^/\s]+$/);
+      const categories = additions[slug];
       expect(categories, slug).to.be.an('array');
       expect(categories.length, slug).to.be.within(1, 3);
       expect(new Set(categories).size, slug).to.equal(categories.length);
@@ -84,5 +107,38 @@ describe('resolveCategories', () => {
     expect(categories).to.deep.equal([]);
     expect(warnings).to.have.lengthOf(1);
     expect(warnings[0]).to.include('uncategorized');
+  });
+
+  it('should append the additions to the declared categories, without duplicating a declared key', () => {
+    expect(
+      resolveCategories({
+        manifest: { categories: ['energy', 'vehicles'] },
+        storeSlug,
+        categoryFallback: {},
+        categoryAdditions: { [storeSlug]: ['vehicles', 'transport'] },
+      }),
+    ).to.deep.equal({ categories: ['energy', 'vehicles', 'transport'], warnings: [] });
+  });
+
+  it('should append the additions to the fallback categories too', () => {
+    expect(
+      resolveCategories({
+        manifest: {},
+        storeSlug,
+        categoryFallback: { [storeSlug]: ['services'] },
+        categoryAdditions: { [storeSlug]: ['transport'] },
+      }),
+    ).to.deep.equal({ categories: ['services', 'transport'], warnings: [] });
+  });
+
+  it('should leave the categories untouched when the store_slug has no addition', () => {
+    expect(
+      resolveCategories({
+        manifest: { categories: ['energy'] },
+        storeSlug,
+        categoryFallback: {},
+        categoryAdditions: { 'jane/other': ['transport'] },
+      }),
+    ).to.deep.equal({ categories: ['energy'], warnings: [] });
   });
 });

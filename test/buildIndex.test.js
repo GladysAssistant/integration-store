@@ -119,6 +119,7 @@ describe('buildIndex', () => {
             owner_avatar_url: 'https://avatars.githubusercontent.com/john',
           },
           categories: ['environment'],
+          countries: [],
           first_seen_at: NOW,
         },
       ],
@@ -605,6 +606,19 @@ describe('buildIndex', () => {
       expect(rejected).to.deep.equal([]);
     });
 
+    it('should append the category additions of the store_slug to the declared categories', async () => {
+      const declaring = manifest({ categories: ['energy'] });
+      delete declaring.cover_image;
+      const { index } = await buildIndex({
+        repositories: [repository('john', 'charger')],
+        ...fetchersFor('john/charger', declaring),
+        categoryAdditions: { 'john/charger': ['vehicles'] },
+      });
+      expect(index.integrations[0].categories).to.deep.equal(['energy', 'vehicles']);
+      // The manifest is published verbatim: the addition lives at the index level.
+      expect(index.integrations[0].manifest.categories).to.deep.equal(['energy']);
+    });
+
     it('should index an uncategorized integration with an author-facing warning', async () => {
       const uncategorizedManifest = manifest();
       delete uncategorizedManifest.categories;
@@ -617,6 +631,50 @@ describe('buildIndex', () => {
       const reasons = rejected.map((entry) => entry.reason);
       expect(reasons.some((reason) => reason.includes('uncategorized'))).to.equal(true);
       expect(rejected.every((entry) => entry.level === 'warning')).to.equal(true);
+    });
+  });
+
+  describe('countries', () => {
+    /**
+     * Build the fetcher set of a single-repository run.
+     * @param {string} slug - "owner/repo" of the repository.
+     * @param {object} manifestContent - Manifest served for the repository.
+     * @returns {object} buildIndex options minus repositories.
+     */
+    function fetchersFor(slug, manifestContent) {
+      return {
+        fetchManifestFile: fakeManifestFetcher({ [slug]: { status: 'ok', raw: JSON.stringify(manifestContent) } }),
+        checkDockerImage: fakeImageChecker(),
+        fetchDocFile: fakeDocFetcher(),
+        downloadCover: fakeCoverDownloader(),
+        storeBaseUrl: STORE_BASE_URL,
+        now: NOW,
+      };
+    }
+
+    it('should publish the declared countries at the index level, winning over the fallback mapping', async () => {
+      const regional = manifest({ gladys_version: '>=5.3.0', countries: ['FR', 'BE'] });
+      delete regional.cover_image;
+      const { index, rejected } = await buildIndex({
+        repositories: [repository('john', 'regional')],
+        ...fetchersFor('john/regional', regional),
+        countryFallback: { 'john/regional': ['CA'] },
+      });
+      expect(index.integrations[0].countries).to.deep.equal(['FR', 'BE']);
+      // the cover placeholder warning is the only degradation: countries never warn
+      expect(rejected.every((entry) => entry.level === 'warning')).to.equal(true);
+      expect(rejected.some((entry) => entry.reason.includes('countries'))).to.equal(false);
+    });
+
+    it('should resolve the countries of a manifest declaring nothing through the fallback mapping', async () => {
+      const legacy = manifest();
+      delete legacy.cover_image;
+      const { index } = await buildIndex({
+        repositories: [repository('john', 'legacy')],
+        ...fetchersFor('john/legacy', legacy),
+        countryFallback: { 'john/legacy': ['CA'] },
+      });
+      expect(index.integrations[0].countries).to.deep.equal(['CA']);
     });
   });
 
