@@ -145,7 +145,7 @@ describe('uploadDirectory', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('should upload every file with a sorted key, forward slashes and the right content type', async () => {
+  it('should upload every file with forward slashes, the right content type, and the crawl documents last', async () => {
     const uploads = [];
     const putObject = async (params) => {
       uploads.push(params);
@@ -159,10 +159,10 @@ describe('uploadDirectory', () => {
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
-      'index-lite.json',
-      'index.json',
       'integrations/john--demo.json',
       'manifest.schema.json',
+      'index-lite.json',
+      'index.json',
       'rejected.json',
     ]);
     expect(skipped).to.deep.equal([]);
@@ -199,6 +199,23 @@ describe('uploadDirectory', () => {
     expect(byKey['manifest.schema.json'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['covers/john--demo.jpg'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['docs/john--demo/en.md'].cacheControl).to.equal('public, max-age=3600');
+  });
+
+  it('should publish the crawl documents after every object they reference', async () => {
+    const uploads = [];
+    const putObject = async (params) => {
+      uploads.push(params.key);
+    };
+
+    await uploadDirectory({ dir, putObject, logger: { log: () => {} } });
+
+    const firstCrawlDocument = uploads.findIndex((key) =>
+      ['index.json', 'index-lite.json', 'rejected.json'].includes(key),
+    );
+    expect(uploads.slice(firstCrawlDocument)).to.have.members(['index.json', 'index-lite.json', 'rejected.json']);
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('integrations/john--demo.json');
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('covers/john--demo.jpg');
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('docs/john--demo/en.md');
   });
 
   it('should default the logger to the console', async () => {
@@ -249,9 +266,9 @@ describe('uploadDirectory', () => {
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
+      'manifest.schema.json',
       'index-lite.json',
       'index.json',
-      'manifest.schema.json',
       'rejected.json',
     ]);
     expect(uploads).to.deep.equal(uploaded);

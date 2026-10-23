@@ -57,6 +57,24 @@ function cacheControlFor(key) {
 }
 
 /**
+ * Publication order of the object keys: everything the crawl documents
+ * reference (covers, docs, per-integration entries, schemas) first, the crawl
+ * documents themselves (index.json, index-lite.json, rejected.json) last. A
+ * consumer that reads a freshly published index thus never follows a
+ * `cover_url`, a `docs` URL or an `entry_url` to an object not uploaded yet,
+ * and a run that fails midway leaves the previous index in place, consistent
+ * with the bucket, rather than a new index pointing at missing objects.
+ * Within each group the keys stay sorted, so the order is deterministic.
+ * @param {string[]} keys - Object keys.
+ * @returns {string[]} The same keys, in upload order.
+ */
+function sortForUpload(keys) {
+  const referenced = keys.filter((key) => !CRAWL_DOCUMENT_KEYS.has(key)).sort();
+  const crawlDocuments = keys.filter((key) => CRAWL_DOCUMENT_KEYS.has(key)).sort();
+  return [...referenced, ...crawlDocuments];
+}
+
+/**
  * List every file under a directory, recursively, returning object keys
  * relative to the root and always using forward slashes (S3/R2 keys).
  * @param {string} dir - Directory to walk.
@@ -193,10 +211,10 @@ function etagMatches(etag, body) {
  * @param {Function} options.putObject - Uploader ({ key, body, contentType, cacheControl }).
  * @param {Function} [options.headObject] - Optional probe ({ key }) => { etag } | null; enables skip-if-unchanged.
  * @param {object} [options.logger] - Logger, console-compatible.
- * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Sorted keys, split by outcome.
+ * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Keys in upload order (referenced objects first, crawl documents last), split by outcome.
  */
 export async function uploadDirectory({ dir, putObject, headObject, logger = console }) {
-  const keys = (await listFiles(dir)).sort();
+  const keys = sortForUpload(await listFiles(dir));
   const uploaded = [];
   const skipped = [];
   for (const key of keys) {
