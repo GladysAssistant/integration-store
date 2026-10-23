@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
+import { INTEGRATIONS_DIR_NAME } from './constants.js';
+
 /**
  * Content-Type to publish a file with, derived from its extension. Serving the
  * right type matters: browsers and Gladys expect application/json for the
@@ -35,20 +37,41 @@ const CRAWL_DOCUMENT_KEYS = new Set(['index.json', 'index-lite.json', 'rejected.
 
 /**
  * Cache-Control to publish a file with. The index and rejection documents are
- * rebuilt on every crawl, so they get a short TTL; documentation pages keep a
- * stable URL but their content follows the repository, so they get a medium
- * TTL; covers and the schema are effectively immutable and can be cached hard.
+ * rebuilt on every crawl, so they get a short TTL; so does a per-integration
+ * entry file (integrations/), which must follow the index as closely as it
+ * does: a longer TTL would let the CDN serve an outdated manifest while the
+ * index already lists the new version. Documentation pages keep a stable URL
+ * but their content follows the repository, so they get a medium TTL; covers
+ * and the schema are effectively immutable and can be cached hard.
  * @param {string} key - Object key.
  * @returns {string} Cache-Control header value.
  */
 function cacheControlFor(key) {
-  if (CRAWL_DOCUMENT_KEYS.has(key)) {
+  if (CRAWL_DOCUMENT_KEYS.has(key) || key.startsWith(`${INTEGRATIONS_DIR_NAME}/`)) {
     return 'public, max-age=300';
   }
   if (key.startsWith('docs/')) {
     return 'public, max-age=3600';
   }
   return 'public, max-age=86400';
+}
+
+/**
+ * Publication order of the object keys: everything the crawl documents
+ * reference (covers, docs, per-integration entries, schemas) first, the crawl
+ * documents themselves (index.json, index-lite.json, rejected.json) last. A
+ * consumer that reads a freshly published index thus never follows a
+ * `cover_url`, a `docs` URL or an `entry_url` to an object not uploaded yet,
+ * and a run that fails midway leaves the previous index in place, consistent
+ * with the bucket, rather than a new index pointing at missing objects.
+ * Within each group the keys stay sorted, so the order is deterministic.
+ * @param {string[]} keys - Object keys.
+ * @returns {string[]} The same keys, in upload order.
+ */
+function sortForUpload(keys) {
+  const referenced = keys.filter((key) => !CRAWL_DOCUMENT_KEYS.has(key)).sort();
+  const crawlDocuments = keys.filter((key) => CRAWL_DOCUMENT_KEYS.has(key)).sort();
+  return [...referenced, ...crawlDocuments];
 }
 
 /**
@@ -168,13 +191,15 @@ function etagMatches(etag, body) {
 /**
  * Upload a directory to an object store through an injected putObject function.
  *
- * When a headObject probe is provided, immutable objects (everything but the
- * index/rejection documents) are only re-uploaded if their remote ETag differs
- * from the local bytes. Covers change almost never, so this turns the dominant,
- * per-integration write cost into a one-off: at steady state a crawl re-writes
- * just the three crawl documents (index.json, index-lite.json and
- * rejected.json) instead of every cover, keeping the write volume (Class A on
- * R2) roughly constant regardless of the store size.
+ * When a headObject probe is provided, every object but the index/rejection
+ * documents is only re-uploaded if its remote ETag differs from the local
+ * bytes. Covers change almost never, and a per-integration entry file only
+ * changes when its integration does (a new manifest version, a GitHub
+ * metadata change), so this turns the dominant, per-integration write cost
+ * into a one-off: at steady state a crawl re-writes just the three crawl
+ * documents (index.json, index-lite.json and rejected.json) plus the few
+ * entries that changed, instead of every cover and every entry, keeping the
+ * write volume (Class A on R2) roughly constant regardless of the store size.
  *
  * Objects are only ever PUT, never deleted: the freshly written
  * index.json/rejected.json always reference the current covers, so leftover
@@ -186,10 +211,10 @@ function etagMatches(etag, body) {
  * @param {Function} options.putObject - Uploader ({ key, body, contentType, cacheControl }).
  * @param {Function} [options.headObject] - Optional probe ({ key }) => { etag } | null; enables skip-if-unchanged.
  * @param {object} [options.logger] - Logger, console-compatible.
- * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Sorted keys, split by outcome.
+ * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Keys in upload order (referenced objects first, crawl documents last), split by outcome.
  */
 export async function uploadDirectory({ dir, putObject, headObject, logger = console }) {
-  const keys = (await listFiles(dir)).sort();
+  const keys = sortForUpload(await listFiles(dir));
   const uploaded = [];
   const skipped = [];
   for (const key of keys) {

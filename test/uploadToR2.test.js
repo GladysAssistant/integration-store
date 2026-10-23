@@ -136,6 +136,8 @@ describe('uploadDirectory', () => {
     await writeFile(path.join(dir, 'covers', 'jane--demo.jpeg'), Buffer.from('jpeg-bytes'));
     await mkdir(path.join(dir, 'docs', 'john--demo'), { recursive: true });
     await writeFile(path.join(dir, 'docs', 'john--demo', 'en.md'), Buffer.from('# English docs'));
+    await mkdir(path.join(dir, 'integrations'), { recursive: true });
+    await writeFile(path.join(dir, 'integrations', 'john--demo.json'), '{"store_slug":"john/demo"}');
     await writeFile(path.join(dir, 'extra.bin'), Buffer.from('binary'));
   });
 
@@ -143,7 +145,7 @@ describe('uploadDirectory', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('should upload every file with a sorted key, forward slashes and the right content type', async () => {
+  it('should upload every file with forward slashes, the right content type, and the crawl documents last', async () => {
     const uploads = [];
     const putObject = async (params) => {
       uploads.push(params);
@@ -157,9 +159,10 @@ describe('uploadDirectory', () => {
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
+      'integrations/john--demo.json',
+      'manifest.schema.json',
       'index-lite.json',
       'index.json',
-      'manifest.schema.json',
       'rejected.json',
     ]);
     expect(skipped).to.deep.equal([]);
@@ -169,6 +172,7 @@ describe('uploadDirectory', () => {
     expect(byKey['index-lite.json'].contentType).to.equal('application/json');
     expect(byKey['rejected.json'].contentType).to.equal('application/json');
     expect(byKey['manifest.schema.json'].contentType).to.equal('application/json');
+    expect(byKey['integrations/john--demo.json'].contentType).to.equal('application/json');
     expect(byKey['covers/placeholder.png'].contentType).to.equal('image/png');
     expect(byKey['covers/john--demo.jpg'].contentType).to.equal('image/jpeg');
     expect(byKey['covers/jane--demo.jpeg'].contentType).to.equal('image/jpeg');
@@ -179,7 +183,7 @@ describe('uploadDirectory', () => {
     expect(byKey['covers/john--demo.jpg'].body.toString()).to.equal('jpg-bytes');
   });
 
-  it('should cache the index short, the docs medium and everything else long', async () => {
+  it('should cache the index and the integration entries short, the docs medium and everything else long', async () => {
     const uploads = [];
     const putObject = async (params) => {
       uploads.push(params);
@@ -191,9 +195,27 @@ describe('uploadDirectory', () => {
     expect(byKey['index.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['index-lite.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['rejected.json'].cacheControl).to.equal('public, max-age=300');
+    expect(byKey['integrations/john--demo.json'].cacheControl).to.equal('public, max-age=300');
     expect(byKey['manifest.schema.json'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['covers/john--demo.jpg'].cacheControl).to.equal('public, max-age=86400');
     expect(byKey['docs/john--demo/en.md'].cacheControl).to.equal('public, max-age=3600');
+  });
+
+  it('should publish the crawl documents after every object they reference', async () => {
+    const uploads = [];
+    const putObject = async (params) => {
+      uploads.push(params.key);
+    };
+
+    await uploadDirectory({ dir, putObject, logger: { log: () => {} } });
+
+    const firstCrawlDocument = uploads.findIndex((key) =>
+      ['index.json', 'index-lite.json', 'rejected.json'].includes(key),
+    );
+    expect(uploads.slice(firstCrawlDocument)).to.have.members(['index.json', 'index-lite.json', 'rejected.json']);
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('integrations/john--demo.json');
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('covers/john--demo.jpg');
+    expect(uploads.slice(0, firstCrawlDocument)).to.include('docs/john--demo/en.md');
   });
 
   it('should default the logger to the console', async () => {
@@ -227,21 +249,26 @@ describe('uploadDirectory', () => {
       if (key === 'covers/placeholder.png') {
         return { etag: undefined };
       }
+      // Byte-identical remote integration entry: must be skipped, unlike the
+      // index documents (an unchanged integration costs no write).
+      if (key === 'integrations/john--demo.json') {
+        return { etag: `"${md5(Buffer.from('{"store_slug":"john/demo"}'))}"` };
+      }
       // Everything else is absent remotely: must be uploaded.
       return null;
     };
 
     const { uploaded, skipped } = await uploadDirectory({ dir, putObject, headObject, logger: { log: () => {} } });
 
-    expect(skipped).to.deep.equal(['covers/john--demo.jpg']);
+    expect(skipped).to.deep.equal(['covers/john--demo.jpg', 'integrations/john--demo.json']);
     expect(uploaded).to.deep.equal([
       'covers/jane--demo.jpeg',
       'covers/placeholder.png',
       'docs/john--demo/en.md',
       'extra.bin',
+      'manifest.schema.json',
       'index-lite.json',
       'index.json',
-      'manifest.schema.json',
       'rejected.json',
     ]);
     expect(uploads).to.deep.equal(uploaded);
@@ -250,5 +277,6 @@ describe('uploadDirectory', () => {
     expect(headCalls).to.not.include('index-lite.json');
     expect(headCalls).to.not.include('rejected.json');
     expect(headCalls).to.include('manifest.schema.json');
+    expect(headCalls).to.include('integrations/john--demo.json');
   });
 });

@@ -1,4 +1,4 @@
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, readdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -78,6 +78,65 @@ describe('writeOutput', () => {
     expect(liteIndex).to.deep.equal(buildLiteIndex(index));
     expect(liteIndex.integrations[0].manifest).to.not.have.property('config_schema');
     expect(JSON.parse(await readFile(path.join(outputDir, 'index.json'), 'utf8'))).to.deep.equal(index);
+  });
+
+  it('should write one integrations/<owner>--<repo>.json per entry, holding the index.json entry verbatim', async () => {
+    const manifest = {
+      manifest_version: 1,
+      type: 'device',
+      name: 'Demo',
+      description: { en: 'Demo', fr: 'Démo' },
+      version: '1.0.0',
+      docker_image: 'ghcr.io/john/demo:1.0.0',
+      gladys_version: '>=4.86.0',
+      config_schema: [{ key: 'api_key', type: 'secret', label: { en: 'API key', fr: "Clé d'API" } }],
+    };
+    const johnEntry = {
+      store_slug: 'john/demo',
+      repo_url: 'https://github.com/john/demo',
+      entry_url: 'https://store.example/integrations/john--demo.json',
+      manifest,
+      cover_url: 'https://store.example/covers/john--demo.jpg',
+      docs: { en: 'https://store.example/docs/john--demo/en.md', fr: 'https://store.example/docs/john--demo/fr.md' },
+      github: { stars: 12, pushed_at: '2026-07-10T12:00:00.000Z', owner_avatar_url: 'https://avatars.example/john' },
+      categories: ['environment'],
+      first_seen_at: '2026-01-05T09:00:00.000Z',
+    };
+    const janeEntry = {
+      ...johnEntry,
+      store_slug: 'jane/other-demo',
+      repo_url: 'https://github.com/jane/other-demo',
+      entry_url: 'https://store.example/integrations/jane--other-demo.json',
+    };
+    const index = {
+      index_format: 1,
+      generated_at: '2026-07-13T08:00:00.000Z',
+      integrations: [janeEntry, johnEntry],
+    };
+
+    await writeOutput({ outputDir, index, rejected: [], coverFiles: [], docsFiles: [] });
+
+    const johnFile = await readFile(path.join(outputDir, 'integrations', 'john--demo.json'), 'utf8');
+    expect(JSON.parse(johnFile)).to.deep.equal(johnEntry);
+    expect(JSON.parse(johnFile).manifest).to.have.property('config_schema');
+    expect(johnFile.endsWith('\n')).to.equal(true);
+    const janeFile = await readFile(path.join(outputDir, 'integrations', 'jane--other-demo.json'), 'utf8');
+    expect(JSON.parse(janeFile)).to.deep.equal(janeEntry);
+    expect(await readdir(path.join(outputDir, 'integrations'))).to.have.members([
+      'jane--other-demo.json',
+      'john--demo.json',
+    ]);
+  });
+
+  it('should create an empty integrations/ directory when the index holds no integration', async () => {
+    await writeOutput({
+      outputDir,
+      index: { index_format: 1, generated_at: 'x', integrations: [] },
+      rejected: [],
+      coverFiles: [],
+      docsFiles: [],
+    });
+    expect(await readdir(path.join(outputDir, 'integrations'))).to.deep.equal([]);
   });
 
   it('should end the JSON files with a newline', async () => {
