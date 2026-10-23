@@ -790,6 +790,55 @@ describe('buildIndex', () => {
     expect(second.rejected).to.deep.equal(first.rejected);
   });
 
+  it('should produce the same output indexed concurrently as sequentially, whatever answers first', async () => {
+    const coverUrl = 'https://example.com/cover.jpg';
+    const withCover = manifest({ cover_image: coverUrl });
+    const withoutCover = manifest();
+    delete withoutCover.cover_image;
+    const slugs = ['amy/a-repo', 'bob/b-repo', 'cat/c-repo', 'dan/d-repo', 'eve/e-repo', 'fay/f-repo'];
+    const repositories = slugs.map((slug) => repository(...slug.split('/')));
+    // The repositories that sort first answer last, so the completion order
+    // is the reverse of the store_slug order.
+    const delayMs = (owner) => (slugs.length - slugs.findIndex((slug) => slug.startsWith(`${owner}/`))) * 3;
+    const slowed =
+      (fetcher) =>
+      async ({ owner, ...rest }) => {
+        await new Promise((resolve) => setTimeout(resolve, delayMs(owner)));
+        return fetcher({ owner, ...rest });
+      };
+    const options = {
+      repositories,
+      fetchManifestFile: slowed(
+        fakeManifestFetcher({
+          'amy/a-repo': { status: 'ok', raw: JSON.stringify(withCover) },
+          'bob/b-repo': { status: 'not_found' },
+          'cat/c-repo': { status: 'ok', raw: JSON.stringify(withoutCover) },
+          'dan/d-repo': { status: 'ok', raw: '{ invalid json' },
+          'eve/e-repo': { status: 'ok', raw: JSON.stringify(withCover) },
+          'fay/f-repo': { status: 'ok', raw: JSON.stringify(withoutCover) },
+        }),
+      ),
+      checkDockerImage: fakeImageChecker(),
+      fetchDocFile: slowed(fakeDocFetcher()),
+      downloadCover: fakeCoverDownloader({
+        [coverUrl]: { status: 'ok', data: makeFakeJpeg(COVER_WIDTH, COVER_HEIGHT) },
+      }),
+      storeBaseUrl: STORE_BASE_URL,
+      now: NOW,
+    };
+
+    const sequential = await buildIndex({ ...options, concurrency: 1 });
+    const concurrent = await buildIndex({ ...options, concurrency: slugs.length });
+
+    expect(sequential.index.integrations.map((i) => i.store_slug)).to.deep.equal([
+      'amy/a-repo',
+      'cat/c-repo',
+      'eve/e-repo',
+      'fay/f-repo',
+    ]);
+    expect(concurrent).to.deep.equal(sequential);
+  });
+
   describe('blocklist', () => {
     const blocklist = {
       repositories: {

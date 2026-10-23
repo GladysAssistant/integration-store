@@ -6,7 +6,7 @@ import { checkDockerImage } from './checkDockerImage.js';
 import { DEFAULT_OUTPUT_DIR, DEFAULT_STORE_BASE_URL, REJECTION_LEVELS, STORE_TOPIC } from './constants.js';
 import { downloadCover, fetchDocFile, fetchManifestFile, searchRepositoriesByTopic } from './github.js';
 import { fetchPreviousIndex } from './previousIndex.js';
-import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from './uploadToR2.js';
+import { createR2Client, createR2ListObjects, createR2PutObject, uploadDirectory } from './uploadToR2.js';
 import { writeOutput } from './writeOutput.js';
 
 const topic = process.env.STORE_TOPIC || STORE_TOPIC;
@@ -65,8 +65,8 @@ if (bucket) {
     endpoint: process.env.R2_ENDPOINT,
   });
   const putObject = createR2PutObject({ client, bucket });
-  const headObject = createR2HeadObject({ client, bucket });
-  const { uploaded, skipped } = await uploadDirectory({ dir: outputDir, putObject, headObject });
+  const listObjects = createR2ListObjects({ client, bucket });
+  const { uploaded, skipped } = await uploadDirectory({ dir: outputDir, putObject, listObjects });
   console.log(
     `Published ${outputDir}/ to R2 bucket "${bucket}" (${uploaded.length} uploaded, ${skipped.length} unchanged; public URL: ${storeBaseUrl}).`,
   );

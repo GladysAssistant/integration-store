@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { expect } from 'chai';
 
-import { createR2Client, createR2HeadObject, createR2PutObject, uploadDirectory } from '../src/uploadToR2.js';
+import { createR2Client, createR2ListObjects, createR2PutObject, uploadDirectory } from '../src/uploadToR2.js';
 
 const md5 = (buffer) => createHash('md5').update(buffer).digest('hex');
 
@@ -55,69 +55,64 @@ describe('createR2PutObject', () => {
   });
 });
 
-describe('createR2HeadObject', () => {
-  it('should return the ETag of an existing object', async () => {
+describe('createR2ListObjects', () => {
+  it('should list every page of the bucket into a key → ETag map', async () => {
     const sent = [];
+    const pages = [
+      {
+        IsTruncated: true,
+        NextContinuationToken: 'page-2',
+        Contents: [
+          { Key: 'covers/john--demo.jpg', ETag: '"aaa"' },
+          { Key: 'index.json', ETag: '"bbb"' },
+        ],
+      },
+      { IsTruncated: false, Contents: [{ Key: 'integrations/john--demo.json', ETag: '"ccc"' }] },
+    ];
     const fakeClient = {
       send: async (command) => {
         sent.push(command);
-        return { ETag: '"abc123"' };
+        return pages[sent.length - 1];
       },
     };
-    const headObject = createR2HeadObject({ client: fakeClient, bucket: 'my-bucket' });
+    const listObjects = createR2ListObjects({ client: fakeClient, bucket: 'my-bucket' });
 
-    const result = await headObject({ key: 'covers/john--demo.jpg' });
+    const etags = await listObjects();
 
-    expect(sent).to.have.lengthOf(1);
-    expect(sent[0]).to.be.instanceOf(HeadObjectCommand);
-    expect(sent[0].input).to.deep.equal({ Bucket: 'my-bucket', Key: 'covers/john--demo.jpg' });
-    expect(result).to.deep.equal({ etag: '"abc123"' });
+    expect(sent).to.have.lengthOf(2);
+    expect(sent[0]).to.be.instanceOf(ListObjectsV2Command);
+    expect(sent[0].input).to.deep.equal({ Bucket: 'my-bucket', ContinuationToken: undefined });
+    expect(sent[1].input).to.deep.equal({ Bucket: 'my-bucket', ContinuationToken: 'page-2' });
+    expect([...etags]).to.deep.equal([
+      ['covers/john--demo.jpg', '"aaa"'],
+      ['index.json', '"bbb"'],
+      ['integrations/john--demo.json', '"ccc"'],
+    ]);
   });
 
-  it('should return null when the object does not exist (NotFound)', async () => {
-    const fakeClient = {
-      send: async () => {
-        const error = new Error('not found');
-        error.name = 'NotFound';
-        throw error;
-      },
-    };
-    const headObject = createR2HeadObject({ client: fakeClient, bucket: 'my-bucket' });
+  it('should return an empty map for an empty bucket (no Contents)', async () => {
+    const fakeClient = { send: async () => ({ IsTruncated: false }) };
+    const listObjects = createR2ListObjects({ client: fakeClient, bucket: 'my-bucket' });
 
-    expect(await headObject({ key: 'missing.json' })).to.equal(null);
+    expect((await listObjects()).size).to.equal(0);
   });
 
-  it('should return null when the object does not exist (NoSuchKey)', async () => {
+  it('should propagate a listing error', async () => {
     const fakeClient = {
       send: async () => {
-        const error = new Error('no such key');
-        error.name = 'NoSuchKey';
-        throw error;
+        throw new Error('AccessDenied');
       },
     };
-    const headObject = createR2HeadObject({ client: fakeClient, bucket: 'my-bucket' });
-
-    expect(await headObject({ key: 'missing.json' })).to.equal(null);
-  });
-
-  it('should rethrow any other error', async () => {
-    const fakeClient = {
-      send: async () => {
-        const error = new Error('boom');
-        error.name = 'InternalError';
-        throw error;
-      },
-    };
-    const headObject = createR2HeadObject({ client: fakeClient, bucket: 'my-bucket' });
+    const listObjects = createR2ListObjects({ client: fakeClient, bucket: 'my-bucket' });
 
     let caught;
     try {
-      await headObject({ key: 'x.json' });
+      await listObjects();
     } catch (error) {
       caught = error;
     }
     expect(caught).to.be.an('error');
-    expect(caught.message).to.equal('boom');
+    expect(caught.message).to.equal('AccessDenied');
   });
 });
 
@@ -234,32 +229,29 @@ describe('uploadDirectory', () => {
     const putObject = async (params) => {
       uploads.push(params.key);
     };
-    const headCalls = [];
-    const headObject = async ({ key }) => {
-      headCalls.push(key);
-      // Byte-identical remote cover: must be skipped.
-      if (key === 'covers/john--demo.jpg') {
-        return { etag: `"${md5(Buffer.from('jpg-bytes'))}"` };
-      }
-      // Remote cover with different bytes: must be re-uploaded.
-      if (key === 'covers/jane--demo.jpeg') {
-        return { etag: '"stale-etag"' };
-      }
-      // Remote object without a usable ETag: must be re-uploaded.
-      if (key === 'covers/placeholder.png') {
-        return { etag: undefined };
-      }
-      // Byte-identical remote integration entry: must be skipped, unlike the
-      // index documents (an unchanged integration costs no write).
-      if (key === 'integrations/john--demo.json') {
-        return { etag: `"${md5(Buffer.from('{"store_slug":"john/demo"}'))}"` };
-      }
-      // Everything else is absent remotely: must be uploaded.
-      return null;
+    let listCalls = 0;
+    const listObjects = async () => {
+      listCalls += 1;
+      return new Map([
+        // Byte-identical remote cover: must be skipped.
+        ['covers/john--demo.jpg', `"${md5(Buffer.from('jpg-bytes'))}"`],
+        // Remote cover with different bytes: must be re-uploaded.
+        ['covers/jane--demo.jpeg', '"stale-etag"'],
+        // Remote object without a usable ETag: must be re-uploaded.
+        ['covers/placeholder.png', undefined],
+        // Byte-identical remote integration entry: must be skipped, unlike the
+        // index documents (an unchanged integration costs no write).
+        ['integrations/john--demo.json', `"${md5(Buffer.from('{"store_slug":"john/demo"}'))}"`],
+        // Byte-identical crawl document: re-uploaded anyway, without comparison.
+        ['index.json', `"${md5(Buffer.from('{"index_format":1}'))}"`],
+        // Everything else is absent remotely: must be uploaded.
+      ]);
     };
 
-    const { uploaded, skipped } = await uploadDirectory({ dir, putObject, headObject, logger: { log: () => {} } });
+    const { uploaded, skipped } = await uploadDirectory({ dir, putObject, listObjects, logger: { log: () => {} } });
 
+    // A single listing for the whole upload, however many objects it holds.
+    expect(listCalls).to.equal(1);
     expect(skipped).to.deep.equal(['covers/john--demo.jpg', 'integrations/john--demo.json']);
     expect(uploaded).to.deep.equal([
       'covers/jane--demo.jpeg',
@@ -271,12 +263,58 @@ describe('uploadDirectory', () => {
       'index.json',
       'rejected.json',
     ]);
-    expect(uploads).to.deep.equal(uploaded);
-    // The mutable index documents are re-uploaded without a HEAD probe.
-    expect(headCalls).to.not.include('index.json');
-    expect(headCalls).to.not.include('index-lite.json');
-    expect(headCalls).to.not.include('rejected.json');
-    expect(headCalls).to.include('manifest.schema.json');
-    expect(headCalls).to.include('integrations/john--demo.json');
+    expect(uploads).to.have.members(uploaded);
+  });
+
+  it('should upload up to `concurrency` objects at a time, the crawl documents only once the rest is written', async () => {
+    const events = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const putObject = async ({ key }) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      events.push(`start ${key}`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      events.push(`end ${key}`);
+      inFlight -= 1;
+    };
+
+    const { uploaded } = await uploadDirectory({ dir, putObject, concurrency: 3, logger: { log: () => {} } });
+
+    expect(maxInFlight).to.equal(3);
+    expect(uploaded).to.have.lengthOf(10);
+    // Every referenced object is fully written before the first crawl document starts.
+    const firstCrawlDocumentStart = events.findIndex((event) =>
+      ['start index.json', 'start index-lite.json', 'start rejected.json'].includes(event),
+    );
+    const lastReferencedEnd = events.findLastIndex(
+      (event) =>
+        event.startsWith('end ') && !['index.json', 'index-lite.json', 'rejected.json'].includes(event.slice(4)),
+    );
+    expect(lastReferencedEnd).to.be.below(firstCrawlDocumentStart);
+  });
+
+  it('should stop before the crawl documents when an upload fails', async () => {
+    const uploads = [];
+    const putObject = async ({ key }) => {
+      if (key === 'covers/john--demo.jpg') {
+        throw new Error('PUT failed');
+      }
+      uploads.push(key);
+    };
+
+    let caught;
+    try {
+      await uploadDirectory({ dir, putObject, concurrency: 2, logger: { log: () => {} } });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).to.be.an('error');
+    expect(caught.message).to.equal('PUT failed');
+    // The previous index stays in place: no crawl document was published.
+    expect(uploads).to.not.include('index.json');
+    expect(uploads).to.not.include('index-lite.json');
+    expect(uploads).to.not.include('rejected.json');
   });
 });

@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-import { INTEGRATIONS_DIR_NAME } from './constants.js';
+import { INTEGRATIONS_DIR_NAME, UPLOAD_CONCURRENCY } from './constants.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 
 /**
  * Content-Type to publish a file with, derived from its extension. Serving the
@@ -57,21 +58,22 @@ function cacheControlFor(key) {
 }
 
 /**
- * Publication order of the object keys: everything the crawl documents
+ * Publication phases of the object keys: everything the crawl documents
  * reference (covers, docs, per-integration entries, schemas) first, the crawl
- * documents themselves (index.json, index-lite.json, rejected.json) last. A
- * consumer that reads a freshly published index thus never follows a
- * `cover_url`, a `docs` URL or an `entry_url` to an object not uploaded yet,
- * and a run that fails midway leaves the previous index in place, consistent
- * with the bucket, rather than a new index pointing at missing objects.
- * Within each group the keys stay sorted, so the order is deterministic.
+ * documents themselves (index.json, index-lite.json, rejected.json) only once
+ * the first phase is fully written. A consumer that reads a freshly published
+ * index thus never follows a `cover_url`, a `docs` URL or an `entry_url` to an
+ * object not uploaded yet, and a run that fails midway leaves the previous
+ * index in place, consistent with the bucket, rather than a new index pointing
+ * at missing objects. Within each phase the keys stay sorted, so the reported
+ * order is deterministic.
  * @param {string[]} keys - Object keys.
- * @returns {string[]} The same keys, in upload order.
+ * @returns {string[][]} The same keys, split into the phases in upload order.
  */
-function sortForUpload(keys) {
+function uploadPhases(keys) {
   const referenced = keys.filter((key) => !CRAWL_DOCUMENT_KEYS.has(key)).sort();
   const crawlDocuments = keys.filter((key) => CRAWL_DOCUMENT_KEYS.has(key)).sort();
-  return [...referenced, ...crawlDocuments];
+  return [referenced, crawlDocuments];
 }
 
 /**
@@ -136,34 +138,39 @@ export function createR2PutObject({ client, bucket }) {
 }
 
 /**
- * Build a headObject function backed by an S3-compatible client and a bucket.
- * It fetches an object's metadata (its ETag) so the uploader can skip
- * re-uploading unchanged objects; a missing object resolves to `null` instead
- * of throwing. HEAD is a cheap read (Class B on R2), traded against the more
- * limited write budget (Class A).
+ * Build a listObjects function backed by an S3-compatible client and a bucket.
+ * It lists the whole bucket (ListObjectsV2, 1000 keys per page) and returns
+ * the ETag of every object, so the uploader can skip re-uploading unchanged
+ * objects. A handful of listing pages replace one HEAD per published file:
+ * thousands of sequential round trips, the bulk of the upload time. A listing
+ * is a Class A operation on R2, but a few per crawl are negligible against
+ * its free tier.
  * @param {object} options - Options.
  * @param {S3Client} options.client - S3 client (createR2Client, or a fake in tests).
  * @param {string} options.bucket - Target bucket name.
- * @returns {Function} headObject({ key }) => Promise<{ etag: string } | null>.
+ * @returns {Function} listObjects() => Promise<Map<string, string>> (object key → quoted ETag).
  */
-export function createR2HeadObject({ client, bucket }) {
-  return async ({ key }) => {
-    try {
-      const response = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      return { etag: response.ETag };
-    } catch (error) {
-      if (error.name === 'NotFound' || error.name === 'NoSuchKey') {
-        return null;
+export function createR2ListObjects({ client, bucket }) {
+  return async () => {
+    const etags = new Map();
+    let continuationToken;
+    do {
+      const response = await client.send(
+        new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: continuationToken }),
+      );
+      for (const object of response.Contents ?? []) {
+        etags.set(object.Key, object.ETag);
       }
-      throw error;
-    }
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken !== undefined);
+    return etags;
   };
 }
 
 /**
- * Objects rebuilt on every crawl: always uploaded without a HEAD probe, since
- * their content changes each run (a `generated_at` timestamp, the integration
- * set) and the probe would never spare a write.
+ * Objects rebuilt on every crawl: always uploaded without an ETag comparison,
+ * since their content changes each run (a `generated_at` timestamp, the
+ * integration set) and the comparison would never spare a write.
  * @param {string} key - Object key.
  * @returns {boolean} True if the object must be re-uploaded unconditionally.
  */
@@ -189,17 +196,20 @@ function etagMatches(etag, body) {
 }
 
 /**
- * Upload a directory to an object store through an injected putObject function.
+ * Upload a directory to an object store through an injected putObject function,
+ * `concurrency` objects at a time (each PUT is a round trip to the bucket: one
+ * after the other, they would add up to minutes).
  *
- * When a headObject probe is provided, every object but the index/rejection
- * documents is only re-uploaded if its remote ETag differs from the local
- * bytes. Covers change almost never, and a per-integration entry file only
- * changes when its integration does (a new manifest version, a GitHub
- * metadata change), so this turns the dominant, per-integration write cost
- * into a one-off: at steady state a crawl re-writes just the three crawl
- * documents (index.json, index-lite.json and rejected.json) plus the few
- * entries that changed, instead of every cover and every entry, keeping the
- * write volume (Class A on R2) roughly constant regardless of the store size.
+ * When a listObjects function is provided, every object but the
+ * index/rejection documents is only re-uploaded if its remote ETag (as listed
+ * before the upload) differs from the local bytes. Covers change almost
+ * never, and a per-integration entry file only changes when its integration
+ * does (a new manifest version, a GitHub metadata change), so this turns the
+ * dominant, per-integration write cost into a one-off: at steady state a
+ * crawl re-writes just the three crawl documents (index.json, index-lite.json
+ * and rejected.json) plus the few entries that changed, instead of every cover
+ * and every entry, keeping the write volume (Class A on R2) roughly constant
+ * regardless of the store size.
  *
  * Objects are only ever PUT, never deleted: the freshly written
  * index.json/rejected.json always reference the current covers, so leftover
@@ -209,30 +219,42 @@ function etagMatches(etag, body) {
  * @param {object} options - Options.
  * @param {string} options.dir - Local directory to publish (the build output).
  * @param {Function} options.putObject - Uploader ({ key, body, contentType, cacheControl }).
- * @param {Function} [options.headObject] - Optional probe ({ key }) => { etag } | null; enables skip-if-unchanged.
+ * @param {Function} [options.listObjects] - Optional bucket listing () => Map<key, etag>; enables skip-if-unchanged.
+ * @param {number} [options.concurrency] - Number of objects uploaded at the same time.
  * @param {object} [options.logger] - Logger, console-compatible.
  * @returns {Promise<{ uploaded: string[], skipped: string[] }>} Keys in upload order (referenced objects first, crawl documents last), split by outcome.
  */
-export async function uploadDirectory({ dir, putObject, headObject, logger = console }) {
-  const keys = sortForUpload(await listFiles(dir));
+export async function uploadDirectory({
+  dir,
+  putObject,
+  listObjects,
+  concurrency = UPLOAD_CONCURRENCY,
+  logger = console,
+}) {
+  const remoteEtags = listObjects ? await listObjects() : new Map();
   const uploaded = [];
   const skipped = [];
-  for (const key of keys) {
-    const body = await readFile(path.join(dir, ...key.split('/')));
-    if (headObject && !isAlwaysUpload(key)) {
-      const head = await headObject({ key });
-      if (head && etagMatches(head.etag, body)) {
-        skipped.push(key);
-        continue;
+  for (const keys of uploadPhases(await listFiles(dir))) {
+    const outcomes = await mapWithConcurrency(keys, concurrency, async (key) => {
+      const body = await readFile(path.join(dir, ...key.split('/')));
+      if (!isAlwaysUpload(key) && etagMatches(remoteEtags.get(key), body)) {
+        return 'skipped';
       }
-    }
-    await putObject({
-      key,
-      body,
-      contentType: contentTypeFor(key),
-      cacheControl: cacheControlFor(key),
+      await putObject({
+        key,
+        body,
+        contentType: contentTypeFor(key),
+        cacheControl: cacheControlFor(key),
+      });
+      return 'uploaded';
     });
-    uploaded.push(key);
+    keys.forEach((key, i) => {
+      if (outcomes[i] === 'uploaded') {
+        uploaded.push(key);
+      } else {
+        skipped.push(key);
+      }
+    });
   }
   logger.log(`Uploaded ${uploaded.length} objects (${skipped.length} unchanged).`);
   return { uploaded, skipped };
