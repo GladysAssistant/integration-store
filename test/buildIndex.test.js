@@ -106,6 +106,7 @@ describe('buildIndex', () => {
         {
           store_slug: 'john/gladys-open-meteo-demo',
           repo_url: 'https://github.com/john/gladys-open-meteo-demo',
+          entry_url: `${STORE_BASE_URL}/integrations/john--gladys-open-meteo-demo.json`,
           manifest: goodManifest,
           cover_url: `${STORE_BASE_URL}/covers/john--gladys-open-meteo-demo.jpg`,
           docs: {

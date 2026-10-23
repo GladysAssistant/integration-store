@@ -21,6 +21,7 @@ function entry(storeSlug, manifest) {
   return {
     store_slug: storeSlug,
     repo_url: `https://github.com/${storeSlug}`,
+    entry_url: `https://store.example/integrations/${fileName}.json`,
     manifest,
     cover_url: `https://store.example/covers/${fileName}.jpg`,
     docs: { en: `https://store.example/docs/${fileName}/en.md`, fr: `https://store.example/docs/${fileName}/fr.md` },

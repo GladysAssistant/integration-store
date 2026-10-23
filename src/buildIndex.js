@@ -5,10 +5,12 @@ import {
   DOCS_OPTIONAL_LANGUAGES,
   DOCS_MIN_CHARS,
   INDEX_FORMAT,
+  INTEGRATIONS_DIR_NAME,
   MANIFEST_FILE_NAME,
   PLACEHOLDER_COVER_FILE_NAME,
   REJECTION_LEVELS,
   docsFilePath,
+  integrationEntryFileName,
 } from './constants.js';
 import { validateCover } from './validateCover.js';
 import { validateManifest } from './validateManifest.js';
@@ -299,9 +301,13 @@ export async function buildIndex({
     });
     categoryWarnings.forEach((categoryWarning) => reject(REJECTION_LEVELS.WARNING, categoryWarning));
 
+    // `entry_url` points at the per-integration copy of this very entry
+    // (written by writeOutput): what a consumer of index-lite.json downloads
+    // at install time to get the full manifest, instead of the whole index.
     integrations.push({
       store_slug: repository.storeSlug,
       repo_url: repository.repoUrl,
+      entry_url: `${storeBaseUrl}/${INTEGRATIONS_DIR_NAME}/${integrationEntryFileName(repository.storeSlug)}`,
       manifest,
       cover_url: coverUrl,
       docs,

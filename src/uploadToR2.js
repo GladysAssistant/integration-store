@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
+import { INTEGRATIONS_DIR_NAME } from './constants.js';
+
 /**
  * Content-Type to publish a file with, derived from its extension. Serving the
  * right type matters: browsers and Gladys expect application/json for the
@@ -35,14 +37,17 @@ const CRAWL_DOCUMENT_KEYS = new Set(['index.json', 'index-lite.json', 'rejected.
 
 /**
  * Cache-Control to publish a file with. The index and rejection documents are
- * rebuilt on every crawl, so they get a short TTL; documentation pages keep a
- * stable URL but their content follows the repository, so they get a medium
- * TTL; covers and the schema are effectively immutable and can be cached hard.
+ * rebuilt on every crawl, so they get a short TTL; so does a per-integration
+ * entry file (integrations/), which must follow the index as closely as it
+ * does: a longer TTL would let the CDN serve an outdated manifest while the
+ * index already lists the new version. Documentation pages keep a stable URL
+ * but their content follows the repository, so they get a medium TTL; covers
+ * and the schema are effectively immutable and can be cached hard.
  * @param {string} key - Object key.
  * @returns {string} Cache-Control header value.
  */
 function cacheControlFor(key) {
-  if (CRAWL_DOCUMENT_KEYS.has(key)) {
+  if (CRAWL_DOCUMENT_KEYS.has(key) || key.startsWith(`${INTEGRATIONS_DIR_NAME}/`)) {
     return 'public, max-age=300';
   }
   if (key.startsWith('docs/')) {
@@ -168,13 +173,15 @@ function etagMatches(etag, body) {
 /**
  * Upload a directory to an object store through an injected putObject function.
  *
- * When a headObject probe is provided, immutable objects (everything but the
- * index/rejection documents) are only re-uploaded if their remote ETag differs
- * from the local bytes. Covers change almost never, so this turns the dominant,
- * per-integration write cost into a one-off: at steady state a crawl re-writes
- * just the three crawl documents (index.json, index-lite.json and
- * rejected.json) instead of every cover, keeping the write volume (Class A on
- * R2) roughly constant regardless of the store size.
+ * When a headObject probe is provided, every object but the index/rejection
+ * documents is only re-uploaded if its remote ETag differs from the local
+ * bytes. Covers change almost never, and a per-integration entry file only
+ * changes when its integration does (a new manifest version, a GitHub
+ * metadata change), so this turns the dominant, per-integration write cost
+ * into a one-off: at steady state a crawl re-writes just the three crawl
+ * documents (index.json, index-lite.json and rejected.json) plus the few
+ * entries that changed, instead of every cover and every entry, keeping the
+ * write volume (Class A on R2) roughly constant regardless of the store size.
  *
  * Objects are only ever PUT, never deleted: the freshly written
  * index.json/rejected.json always reference the current covers, so leftover

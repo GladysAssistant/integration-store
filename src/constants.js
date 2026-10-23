@@ -47,6 +47,25 @@ export function docsFilePath(lang) {
   return `docs/${lang}.md`;
 }
 
+// Per-integration entry files: every indexed integration is also published on
+// its own, as integrations/<owner>--<repo>.json, holding exactly its entry of
+// index.json (full manifest included). A consumer that lists the catalog from
+// index-lite.json can then install an integration by downloading its single
+// entry (a few dozen KB) instead of the whole index.json (every manifest of
+// the store), through the `entry_url` each index entry carries.
+export const INTEGRATIONS_DIR_NAME = 'integrations';
+
+/**
+ * File name of the per-integration entry file, relative to INTEGRATIONS_DIR_NAME,
+ * e.g. "john--gladys-open-meteo-demo.json" — the same <owner>--<repo> stem as
+ * the covers and the docs.
+ * @param {string} storeSlug - "owner/repo".
+ * @returns {string} File name.
+ */
+export function integrationEntryFileName(storeSlug) {
+  return `${storeSlug.replace('/', '--')}.json`;
+}
+
 // Controlled vocabulary of the catalog browse categories
 // (integration-catalog-categories.md §3). The manifest schema deliberately
 // carries no enum: the schema rejects the shape only, and this list filters
