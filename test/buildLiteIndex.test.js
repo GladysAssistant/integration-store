@@ -9,6 +9,7 @@ const validManifest = JSON.parse(readFileSync(new URL('./fixtures/valid-manifest
 const providerManifest = JSON.parse(
   readFileSync(new URL('./fixtures/provider-manifest.json', import.meta.url), 'utf8'),
 );
+const musicManifest = JSON.parse(readFileSync(new URL('./fixtures/music-manifest.json', import.meta.url), 'utf8'));
 
 /**
  * Build an index entry as produced by buildIndex.
@@ -91,6 +92,14 @@ describe('buildLiteIndex', () => {
     for (const field of ['widgets', 'scene_triggers', 'scene_actions']) {
       expect(provider.manifest).to.not.have.property(field);
     }
+    const [player] = buildLiteIndex({
+      ...index,
+      integrations: [entry('john/gladys-sonos', musicManifest)],
+    }).integrations;
+    for (const field of ['music', 'network_discovery']) {
+      expect(player.manifest).to.not.have.property(field);
+    }
+    expect(player.manifest.keywords).to.deep.equal(musicManifest.keywords);
   });
 
   it('should be a strict subset of the index', () => {

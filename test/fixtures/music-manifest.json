@@ -1,0 +1,26 @@
+{
+  "manifest_version": 1,
+  "type": "device",
+  "name": "Sonos Players",
+  "description": {
+    "en": "Control your Sonos speakers: playback, queue, favorites and search.",
+    "fr": "Pilotez vos enceintes Sonos : lecture, file d'attente, favoris et recherche."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/john/gladys-sonos-players:1.0.0",
+  "gladys_version": ">=5.3.0",
+  "categories": ["multimedia"],
+  "keywords": ["Sonos", "speaker", "multiroom"],
+  "cover_image": "https://raw.githubusercontent.com/john/gladys-sonos-players/main/cover.jpg",
+  "transports": ["local"],
+  "network_discovery": [{ "type": "ssdp", "st": "urn:schemas-upnp-org:device:ZonePlayer:1" }],
+  "config_schema": [
+    {
+      "key": "household_name",
+      "type": "string",
+      "label": { "en": "Household name", "fr": "Nom du foyer Sonos" },
+      "placeholder": { "en": "Home" }
+    }
+  ],
+  "music": { "browse": true, "search": true, "queue": true, "append": false }
+}
