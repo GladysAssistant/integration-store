@@ -1857,9 +1857,11 @@ describe('validateManifest', () => {
         communication: { messaging: { receive: true } },
         weather: {},
         provider: { widgets: [{ key: 'releases', label: { en: 'Releases' } }] },
+        ai: {},
+        tts: {},
       };
       Object.entries(otherTypes).forEach(([type, fields]) => {
-        const manifest = { ...buildCalendarManifest(), type, ...fields };
+        const manifest = { ...buildCalendarManifest(), type, gladys_version: '>=5.3.0', ...fields };
         expect(validateManifest(manifest), type).to.deep.equal({
           valid: false,
           errors: ['manifest.account_schema: only allowed on calendar integrations'],
@@ -1938,6 +1940,167 @@ describe('validateManifest', () => {
       manifest.messaging = { receive: false };
       manifest.contact_schema = [{ key: 'token', type: 'secret', label: { en: 'Token' } }];
       expect(validateManifest(manifest).valid).to.equal(false);
+    });
+  });
+
+  describe('ai and tts types', () => {
+    const fixtures = {
+      ai: JSON.parse(readFileSync(new URL('./fixtures/ai-manifest.json', import.meta.url), 'utf8')),
+      tts: JSON.parse(readFileSync(new URL('./fixtures/tts-manifest.json', import.meta.url), 'utf8')),
+    };
+    const buildTypedManifest = (type) => structuredClone(fixtures[type]);
+
+    it('should accept the reference ai manifest (config_schema and actions, gladys_version >= 5.3.0)', () => {
+      expect(validateManifest(buildTypedManifest('ai'))).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept the reference tts manifest (config_schema and a sub-container, gladys_version >= 5.3.0)', () => {
+      expect(validateManifest(buildTypedManifest('tts'))).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    ['ai', 'tts'].forEach((type) => {
+      describe(type, () => {
+        it('should accept a bare manifest: no type-specific field is required', () => {
+          const manifest = buildTypedManifest(type);
+          delete manifest.config_schema;
+          delete manifest.actions;
+          delete manifest.containers;
+          delete manifest.keywords;
+          expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+        });
+
+        it('should accept the capability fields on top of the primary contract', () => {
+          const manifest = buildTypedManifest(type);
+          manifest.widgets = [{ key: 'usage', label: { en: 'Usage' } }];
+          manifest.scene_actions = [{ key: 'warm_up', label: { en: 'Warm the model up' } }];
+          expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+        });
+
+        it('should reject the type on a gladys_version range older Gladys releases satisfy', () => {
+          const manifest = buildTypedManifest(type);
+          delete manifest.keywords;
+          manifest.gladys_version = '>=5.2.0';
+          expect(validateManifest(manifest)).to.deep.equal({
+            valid: false,
+            errors: [
+              `manifest.gladys_version: type "${type}" requires ">=5.3.0" at minimum` +
+                ' (older Gladys releases reject manifests carrying an unknown type)',
+            ],
+          });
+        });
+
+        it('should reject messaging and contact_schema, like every non-communication type', () => {
+          const manifest = buildTypedManifest(type);
+          manifest.messaging = { receive: false };
+          manifest.contact_schema = [{ key: 'token', type: 'secret', label: { en: 'Token' } }];
+          expect(validateManifest(manifest).valid).to.equal(false);
+        });
+
+        it('should reject account_schema, with the explicit calendar rule', () => {
+          const manifest = buildTypedManifest(type);
+          manifest.account_schema = [{ key: 'voice', type: 'string', label: { en: 'Voice' } }];
+          expect(validateManifest(manifest)).to.deep.equal({
+            valid: false,
+            errors: ['manifest.account_schema: only allowed on calendar integrations'],
+          });
+        });
+
+        it('should reject the music capability, with the explicit device rule', () => {
+          const manifest = buildTypedManifest(type);
+          manifest.music = { browse: true };
+          expect(validateManifest(manifest)).to.deep.equal({
+            valid: false,
+            errors: ['manifest.music: only allowed on device integrations'],
+          });
+        });
+      });
+    });
+  });
+
+  describe('music capability', () => {
+    const musicManifest = JSON.parse(readFileSync(new URL('./fixtures/music-manifest.json', import.meta.url), 'utf8'));
+    const buildMusicManifest = () => structuredClone(musicManifest);
+
+    it('should accept the reference music manifest (a device integration declaring the four operations)', () => {
+      expect(validateManifest(buildMusicManifest())).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should accept an empty declaration (an artwork-only player) and a partial one', () => {
+      [{}, { browse: true }, { append: true, queue: false }].forEach((music) => {
+        const manifest = buildMusicManifest();
+        manifest.music = music;
+        expect(validateManifest(manifest), JSON.stringify(music)).to.deep.equal({ valid: true, errors: [] });
+      });
+    });
+
+    it('should reject the field on every other type, with the explicit rule', () => {
+      const otherTypes = {
+        communication: { messaging: { receive: true } },
+        weather: {},
+        calendar: {},
+        provider: { widgets: [{ key: 'now_playing', label: { en: 'Now playing' } }] },
+        ai: {},
+        tts: {},
+      };
+      Object.entries(otherTypes).forEach(([type, fields]) => {
+        const manifest = { ...buildMusicManifest(), type, ...fields };
+        delete manifest.network_discovery;
+        expect(validateManifest(manifest), type).to.deep.equal({
+          valid: false,
+          errors: ['manifest.music: only allowed on device integrations'],
+        });
+      });
+    });
+
+    it('should not count as the capability a provider is made of', () => {
+      const manifest = buildMusicManifest();
+      manifest.type = 'provider';
+      delete manifest.network_discovery;
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.music: only allowed on device integrations',
+        'manifest.type: a provider integration must declare at least one capability field' +
+          ' (widgets, scene_triggers, scene_actions, energy_contracts)',
+      ]);
+    });
+
+    it('should keep the other schema errors next to the music rule', () => {
+      const manifest = buildMusicManifest();
+      manifest.type = 'weather';
+      manifest.name = 'ab';
+      delete manifest.network_discovery;
+      expect(validateManifest(manifest).errors).to.deep.equal([
+        'manifest.name: must NOT have fewer than 3 characters',
+        'manifest.music: only allowed on device integrations',
+      ]);
+    });
+
+    it('should reject a malformed declaration: not an object, an unknown operation, a non-boolean', () => {
+      const cases = [
+        ['yes', 'manifest.music: must be object'],
+        [null, 'manifest.music: must be object'],
+        [[true], 'manifest.music: must be object'],
+        [{ lyrics: true }, 'manifest.music: must NOT have additional properties'],
+        [{ browse: 'yes' }, 'manifest.music.browse: must be boolean'],
+        [{ append: 1 }, 'manifest.music.append: must be boolean'],
+      ];
+      cases.forEach(([music, error]) => {
+        const manifest = buildMusicManifest();
+        manifest.music = music;
+        expect(validateManifest(manifest), JSON.stringify(music)).to.deep.equal({ valid: false, errors: [error] });
+      });
+    });
+
+    it('should reject the field on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = buildMusicManifest();
+      delete manifest.keywords;
+      manifest.gladys_version = '>=5.2.0';
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.gladys_version: declaring music requires ">=5.3.0" at minimum' +
+            ' (older Gladys releases reject manifests carrying unknown fields)',
+        ],
+      });
     });
   });
 

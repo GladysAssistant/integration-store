@@ -65,6 +65,11 @@ const EXPLICIT_SCHEMA_RULES = [
     message: 'manifest.account_schema: only allowed on calendar integrations',
   },
   {
+    // capabilities/music.md §4.1: a player is a device
+    clusterPath: `#/allOf/${manifestSchema.allOf.findIndex((rule) => rule.if.required?.includes('music'))}/`,
+    message: 'manifest.music: only allowed on device integrations',
+  },
+  {
     // capabilities/energy-contracts.md
     clusterPath: '#/properties/energy_contracts/anyOf',
     message: 'manifest.energy_contracts: must declare templates or calendars',

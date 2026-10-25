@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "type": "tts",
+  "name": "Piper Voice",
+  "description": {
+    "en": "Local text-to-speech voice for Gladys, powered by Piper.",
+    "fr": "Voix de synthèse vocale locale pour Gladys, propulsée par Piper."
+  },
+  "version": "1.0.0",
+  "docker_image": "ghcr.io/john/gladys-piper-tts:1.0.0",
+  "gladys_version": ">=5.3.0",
+  "categories": ["assistants"],
+  "cover_image": "https://raw.githubusercontent.com/john/gladys-piper-tts/main/cover.jpg",
+  "config_schema": [
+    {
+      "key": "voice_en",
+      "type": "select",
+      "label": { "en": "English voice", "fr": "Voix anglaise" },
+      "default": "en_US-lessac-medium",
+      "options": [
+        { "value": "en_US-lessac-medium", "label": { "en": "Lessac (US, medium)" } },
+        { "value": "en_GB-alba-medium", "label": { "en": "Alba (GB, medium)" } }
+      ]
+    },
+    {
+      "key": "voice_fr",
+      "type": "select",
+      "label": { "en": "French voice", "fr": "Voix française" },
+      "default": "fr_FR-siwis-medium",
+      "options": [
+        { "value": "fr_FR-siwis-medium", "label": { "en": "Siwis (medium)", "fr": "Siwis (moyenne)" } },
+        { "value": "fr_FR-upmc-medium", "label": { "en": "UPMC (medium)", "fr": "UPMC (moyenne)" } }
+      ]
+    },
+    {
+      "key": "speed",
+      "type": "number",
+      "label": { "en": "Speaking rate", "fr": "Vitesse d'élocution" },
+      "default": 1,
+      "min": 0.5,
+      "max": 2
+    }
+  ],
+  "containers": [
+    {
+      "name": "piper",
+      "docker_image": "ghcr.io/john/piper-http:1.2.0",
+      "memory_mb": 1024,
+      "ports": [
+        { "container_port": 5000, "name": "piper_http", "label": { "en": "Piper HTTP API" }, "browsable": false }
+      ]
+    }
+  ]
+}
