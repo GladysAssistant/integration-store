@@ -50,6 +50,7 @@ describe('searchRepositoriesByTopic', () => {
     ]);
     expect(calls).to.have.lengthOf(1);
     expect(calls[0].url).to.include(encodeURIComponent('topic:gladys-assistant-integration is:public'));
+    expect(calls[0].url).to.include('&sort=updated&order=desc&per_page=100&page=1');
     expect(calls[0].options.headers.Authorization).to.equal('Bearer gh-token');
     expect(calls[0].options.signal).to.be.instanceOf(AbortSignal);
   });
@@ -76,19 +77,93 @@ describe('searchRepositoriesByTopic', () => {
     expect(requestedPages).to.deep.equal(['1', '2']);
   });
 
-  it('should stop and warn when the search API result cap is reached', async () => {
+  it('should search the whole creation-date range, from 2008 to now rounded up to the second', async () => {
+    const queries = [];
+    const fetchFn = async (url) => {
+      queries.push(new URL(url).searchParams.get('q'));
+      return new Response(JSON.stringify({ total_count: 0, items: [] }));
+    };
+    await searchRepositoriesByTopic({ topic: 'x', fetchFn, nowFn: () => Date.UTC(2026, 0, 5, 9, 0, 0, 1) });
+    expect(queries).to.deep.equal(['topic:x is:public created:2008-01-01T00:00:00Z..2026-01-05T09:00:01Z']);
+  });
+
+  it('should split a slice over the search API cap by creation date and collect every repository', async () => {
+    // 5 repositories, cap 2, page size 2: the whole range is over the cap,
+    // so is its second half; the leaves each fit in the cap.
+    const created = {
+      'a/r1': Date.UTC(2010, 0, 1),
+      'b/r2': Date.UTC(2020, 0, 1),
+      'c/r3': Date.UTC(2024, 0, 1),
+      'd/r4': Date.UTC(2025, 6, 1),
+      'e/r5': Date.UTC(2026, 0, 1),
+    };
+    const queries = [];
+    const fetchFn = async (url) => {
+      const params = new URL(url).searchParams;
+      const query = params.get('q');
+      const page = Number(params.get('page'));
+      const perPage = Number(params.get('per_page'));
+      queries.push(`${query} page=${page}`);
+      const [, from, to] = query.match(/created:(\S+)\.\.(\S+)$/);
+      const matching = Object.entries(created)
+        .filter(([, createdAt]) => createdAt >= Date.parse(from) && createdAt <= Date.parse(to))
+        .map(([slug]) => searchItem(...slug.split('/')));
+      return new Response(
+        JSON.stringify({ total_count: matching.length, items: matching.slice((page - 1) * perPage, page * perPage) }),
+      );
+    };
     const warnings = [];
-    const fetchFn = async () => new Response(JSON.stringify({ items: [searchItem('a', 'r1'), searchItem('b', 'r2')] }));
     const repositories = await searchRepositoriesByTopic({
       topic: 'x',
       fetchFn,
       perPage: 2,
       maxResults: 2,
       logger: { warn: (message) => warnings.push(message) },
+      nowFn: () => Date.UTC(2026, 6, 1),
+    });
+    expect(repositories.map((r) => r.storeSlug).sort()).to.deep.equal(['a/r1', 'b/r2', 'c/r3', 'd/r4', 'e/r5']);
+    expect(warnings).to.deep.equal([]);
+    // every probe splits at a second boundary, the slices never overlap, and
+    // a slice is left as soon as its total_count is collected (no extra page)
+    expect(queries).to.deep.equal([
+      'topic:x is:public created:2008-01-01T00:00:00Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2008-01-01T00:00:00Z..2017-04-01T00:00:00Z page=1',
+      'topic:x is:public created:2017-04-01T00:00:01Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2017-04-01T00:00:01Z..2021-11-15T00:00:00Z page=1',
+      'topic:x is:public created:2021-11-15T00:00:01Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2021-11-15T00:00:01Z..2024-03-08T12:00:00Z page=1',
+      'topic:x is:public created:2024-03-08T12:00:01Z..2026-07-01T00:00:00Z page=1',
+    ]);
+  });
+
+  it('should keep a single entry when a repository is returned twice', async () => {
+    const pages = [{ items: [searchItem('a', 'r1'), searchItem('b', 'r2')] }, { items: [searchItem('b', 'r2')] }];
+    const fetchFn = async () => new Response(JSON.stringify(pages.shift()));
+    const repositories = await searchRepositoriesByTopic({ topic: 'x', fetchFn, perPage: 2 });
+    expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['a/r1', 'b/r2']);
+  });
+
+  it('should stop and warn when the search API cap is reached on a slice too narrow to split', async () => {
+    const warnings = [];
+    const queries = [];
+    const fetchFn = async (url) => {
+      queries.push(new URL(url).searchParams.get('q'));
+      return new Response(JSON.stringify({ total_count: 3, items: [searchItem('a', 'r1'), searchItem('b', 'r2')] }));
+    };
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn,
+      perPage: 2,
+      maxResults: 2,
+      logger: { warn: (message) => warnings.push(message) },
+      // one second after the floor of the range: a 1-second slice
+      nowFn: () => Date.UTC(2008, 0, 1, 0, 0, 1),
     });
     expect(repositories).to.have.lengthOf(2);
+    expect(queries).to.deep.equal(['topic:x is:public created:2008-01-01T00:00:00Z..2008-01-01T00:00:01Z']);
     expect(warnings).to.have.lengthOf(1);
     expect(warnings[0]).to.include('cap reached');
+    expect(warnings[0]).to.include('2008-01-01T00:00:00Z..2008-01-01T00:00:01Z');
   });
 
   it('should throw when the search request fails', async () => {

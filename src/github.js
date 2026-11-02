@@ -11,8 +11,19 @@ import { isForbiddenHost } from './isForbiddenHost.js';
 
 const GITHUB_API_BASE_URL = 'https://api.github.com';
 const USER_AGENT = 'gladys-integration-store-indexer';
-// The GitHub search API never returns more than 1000 results.
+// The GitHub search API never returns more than 1000 results per query,
+// whatever the pagination. Past that size the topic is crawled by slices of
+// repository creation date (`created:from..to`): a slice holding more than
+// the cap is split in two, recursively, until every slice fits. A creation
+// date never changes, so the slices are disjoint and together cover the
+// whole topic — no integration is left behind.
 const SEARCH_MAX_RESULTS = 1000;
+// Lower bound of the creation-date slicing: no public repository predates it.
+const SEARCH_CREATED_FLOOR_MS = Date.UTC(2008, 0, 1);
+// Granularity of the `created:` qualifier: one second. A slice this narrow
+// cannot be split further (only matters if more than SEARCH_MAX_RESULTS
+// tagged repositories were created in the very same second).
+const SEARCH_SLICE_STEP_MS = 1000;
 // The search API has its own strict rate limit (~30 requests/minute): a
 // transient hit is retried with a bounded backoff instead of failing the run.
 const SEARCH_MAX_ATTEMPTS = 3;
@@ -102,9 +113,26 @@ function rateLimitDelayMs(response, nowMs) {
 }
 
 /**
+ * Format an epoch time for the `created:` search qualifier, at the second
+ * granularity GitHub accepts (e.g. "2026-01-05T09:00:00Z").
+ * @param {number} epochMs - Epoch time in milliseconds (second-aligned).
+ * @returns {string} ISO 8601 timestamp without milliseconds.
+ */
+function searchTimestamp(epochMs) {
+  return new Date(epochMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
  * Search all public repositories tagged with a topic. Publishing an
  * integration IS adding this topic to a public repo: this list is the
  * decentralized source of truth of the store.
+ *
+ * The search API caps every query at SEARCH_MAX_RESULTS results, so the topic
+ * is searched by slices of repository creation date: the whole range first
+ * (2008 to now), then — each time a slice reports more results than the cap —
+ * its two halves, recursively, until every slice fits and is paginated through.
+ * A store under the cap still costs a single query; a bigger one costs a
+ * handful of extra probes, well within the search rate limit of a run.
  * @param {object} options - Options.
  * @param {string} options.topic - GitHub topic to search.
  * @param {string} [options.token] - GitHub token (higher rate limit); optional.
@@ -126,60 +154,107 @@ export async function searchRepositoriesByTopic({
   sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   nowFn = Date.now,
 }) {
-  const repositories = [];
-  let page = 1;
-  let attempt = 1;
-  for (;;) {
-    const url = `${GITHUB_API_BASE_URL}/search/repositories?q=${encodeURIComponent(
-      `topic:${topic} is:public`,
-    )}&per_page=${perPage}&page=${page}`;
-    const response = await fetchFn(url, {
-      headers: buildApiHeaders(token),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      if (isRateLimited(response) && attempt < SEARCH_MAX_ATTEMPTS) {
-        const delayMs = rateLimitDelayMs(response, nowFn());
-        logger.warn(
-          `GitHub search rate limited (HTTP ${response.status}), retrying in ${Math.round(delayMs / 1000)}s` +
-            ` (attempt ${attempt}/${SEARCH_MAX_ATTEMPTS})...`,
-        );
-        await sleepFn(delayMs);
-        attempt += 1;
-        continue;
+  /**
+   * Fetch one page of a search query, retrying a rate-limited response with
+   * a bounded backoff.
+   * @param {string} query - Search query (qualifiers).
+   * @param {number} page - Page number (1-based).
+   * @returns {Promise<{total_count: number, items: object[]}>} Search API body.
+   */
+  async function fetchSearchPage(query, page) {
+    // An explicit sort: the default "best match" order is not guaranteed
+    // stable from one page request to the next, and an unstable order
+    // repeats some repositories across pages while skipping others.
+    // Newest update first: a repository updated during the crawl moves to
+    // the front and shifts the others later, so at worst a page is seen
+    // twice (deduplicated below), never skipped.
+    const url =
+      `${GITHUB_API_BASE_URL}/search/repositories?q=${encodeURIComponent(query)}` +
+      `&sort=updated&order=desc&per_page=${perPage}&page=${page}`;
+    let attempt = 1;
+    for (;;) {
+      const response = await fetchFn(url, {
+        headers: buildApiHeaders(token),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (response.ok) {
+        return response.json();
       }
-      throw new Error(`GitHub repository search failed (HTTP ${response.status})`);
-    }
-    attempt = 1;
-    const body = await response.json();
-    repositories.push(
-      ...body.items.map((item) => ({
-        storeSlug: item.full_name,
-        owner: item.owner.login,
-        repo: item.name,
-        repoUrl: item.html_url,
-        defaultBranch: item.default_branch,
-        stars: item.stargazers_count,
-        // Repository creation date: the one-time backfill seed of
-        // first_seen_at for entries indexed before the field existed —
-        // never pushed_at, a documentation commit would reshuffle the
-        // catalog's "Newest first" sort.
-        createdAt: item.created_at,
-        pushedAt: item.pushed_at,
-        ownerAvatarUrl: item.owner.avatar_url,
-      })),
-    );
-    if (body.items.length < perPage) {
-      return repositories;
-    }
-    if (page * perPage >= maxResults) {
+      if (!isRateLimited(response) || attempt >= SEARCH_MAX_ATTEMPTS) {
+        throw new Error(`GitHub repository search failed (HTTP ${response.status})`);
+      }
+      const delayMs = rateLimitDelayMs(response, nowFn());
       logger.warn(
-        `GitHub search API cap reached (${maxResults} results): some integrations may be missing from the index.`,
+        `GitHub search rate limited (HTTP ${response.status}), retrying in ${Math.round(delayMs / 1000)}s` +
+          ` (attempt ${attempt}/${SEARCH_MAX_ATTEMPTS})...`,
       );
-      return repositories;
+      await sleepFn(delayMs);
+      attempt += 1;
     }
-    page += 1;
   }
+
+  // Keyed by full name: a repository can only be created once, so the slices
+  // never overlap — the map absorbs a page drifting while the crawl
+  // paginates (a repository updated or tagged mid-run shifting the others).
+  const repositories = new Map();
+
+  /**
+   * Crawl every tagged repository created within [fromMs, toMs] (inclusive,
+   * second-aligned bounds), splitting the slice when it exceeds the cap.
+   * @param {number} fromMs - Start of the slice, epoch milliseconds.
+   * @param {number} toMs - End of the slice, epoch milliseconds.
+   * @returns {Promise<void>} Resolves once the slice is fully collected.
+   */
+  async function crawlSlice(fromMs, toMs) {
+    const query = `topic:${topic} is:public created:${searchTimestamp(fromMs)}..${searchTimestamp(toMs)}`;
+    let page = 1;
+    let body = await fetchSearchPage(query, page);
+    if (body.total_count > maxResults && toMs - fromMs >= 2 * SEARCH_SLICE_STEP_MS) {
+      // Split at a second boundary: [from, mid] and [mid + 1 s, to] are both
+      // non-empty and disjoint.
+      const midMs = fromMs + Math.floor((toMs - fromMs) / (2 * SEARCH_SLICE_STEP_MS)) * SEARCH_SLICE_STEP_MS;
+      await crawlSlice(fromMs, midMs);
+      await crawlSlice(midMs + SEARCH_SLICE_STEP_MS, toMs);
+      return;
+    }
+    for (;;) {
+      for (const item of body.items) {
+        repositories.set(item.full_name, {
+          storeSlug: item.full_name,
+          owner: item.owner.login,
+          repo: item.name,
+          repoUrl: item.html_url,
+          defaultBranch: item.default_branch,
+          stars: item.stargazers_count,
+          // Repository creation date: the one-time backfill seed of
+          // first_seen_at for entries indexed before the field existed —
+          // never pushed_at, a documentation commit would reshuffle the
+          // catalog's "Newest first" sort.
+          createdAt: item.created_at,
+          pushedAt: item.pushed_at,
+          ownerAvatarUrl: item.owner.avatar_url,
+        });
+      }
+      if (body.items.length < perPage || page * perPage >= body.total_count) {
+        return;
+      }
+      if (page * perPage >= maxResults) {
+        logger.warn(
+          `GitHub search API cap reached (${maxResults} results) on an unsplittable slice ` +
+            `(${searchTimestamp(fromMs)}..${searchTimestamp(toMs)}): some integrations may be missing from the index.`,
+        );
+        return;
+      }
+      page += 1;
+      body = await fetchSearchPage(query, page);
+    }
+  }
+
+  // Upper bound rounded up to the next second so that a repository created
+  // during the very millisecond of the call is still covered.
+  const nowMs = Math.ceil(nowFn() / SEARCH_SLICE_STEP_MS) * SEARCH_SLICE_STEP_MS;
+  await crawlSlice(SEARCH_CREATED_FLOOR_MS, nowMs);
+  return [...repositories.values()];
 }
 
 /**

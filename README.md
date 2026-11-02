@@ -36,6 +36,8 @@ every Gladys instance downloads and caches the index
 (catalog, one-click install, update detection)
 ```
 
+Step 1 is not bounded by the GitHub search API cap of 1000 results per query: the topic is searched by slices of repository creation date, and a slice holding more than the cap is split in two, recursively, until every slice fits. Creation dates never change, so the slices are disjoint and together cover the whole topic, whatever its size. A store under the cap still costs a single query; a bigger one a handful of extra probes per thousand integrations. Each slice is paginated with an explicit sort (newest update first): the default "best match" order of the search API is not stable across page requests, and would repeat some repositories while skipping others.
+
 ## Publish your integration
 
 No account to create, no PR to get approved:
