@@ -66,7 +66,10 @@ describe('searchRepositoriesByTopic', () => {
   });
 
   it('should paginate until a page is not full', async () => {
-    const pages = [{ items: [searchItem('a', 'r1'), searchItem('b', 'r2')] }, { items: [searchItem('c', 'r3')] }];
+    const pages = [
+      { total_count: 3, items: [searchItem('a', 'r1'), searchItem('b', 'r2')] },
+      { total_count: 3, items: [searchItem('c', 'r3')] },
+    ];
     const requestedPages = [];
     const fetchFn = async (url) => {
       requestedPages.push(new URL(url).searchParams.get('page'));
@@ -77,14 +80,14 @@ describe('searchRepositoriesByTopic', () => {
     expect(requestedPages).to.deep.equal(['1', '2']);
   });
 
-  it('should search the whole creation-date range, from 2008 to now rounded up to the second', async () => {
+  it('should search the whole creation-date range, from 2007 to now rounded up to the second', async () => {
     const queries = [];
     const fetchFn = async (url) => {
       queries.push(new URL(url).searchParams.get('q'));
       return new Response(JSON.stringify({ total_count: 0, items: [] }));
     };
     await searchRepositoriesByTopic({ topic: 'x', fetchFn, nowFn: () => Date.UTC(2026, 0, 5, 9, 0, 0, 1) });
-    expect(queries).to.deep.equal(['topic:x is:public created:2008-01-01T00:00:00Z..2026-01-05T09:00:01Z']);
+    expect(queries).to.deep.equal(['topic:x is:public created:2007-01-01T00:00:00Z..2026-01-05T09:00:01Z']);
   });
 
   it('should split a slice over the search API cap by creation date and collect every repository', async () => {
@@ -126,21 +129,116 @@ describe('searchRepositoriesByTopic', () => {
     // every probe splits at a second boundary, the slices never overlap, and
     // a slice is left as soon as its total_count is collected (no extra page)
     expect(queries).to.deep.equal([
-      'topic:x is:public created:2008-01-01T00:00:00Z..2026-07-01T00:00:00Z page=1',
-      'topic:x is:public created:2008-01-01T00:00:00Z..2017-04-01T00:00:00Z page=1',
-      'topic:x is:public created:2017-04-01T00:00:01Z..2026-07-01T00:00:00Z page=1',
-      'topic:x is:public created:2017-04-01T00:00:01Z..2021-11-15T00:00:00Z page=1',
-      'topic:x is:public created:2021-11-15T00:00:01Z..2026-07-01T00:00:00Z page=1',
-      'topic:x is:public created:2021-11-15T00:00:01Z..2024-03-08T12:00:00Z page=1',
-      'topic:x is:public created:2024-03-08T12:00:01Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2007-01-01T00:00:00Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2007-01-01T00:00:00Z..2016-09-30T12:00:00Z page=1',
+      'topic:x is:public created:2016-09-30T12:00:01Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2016-09-30T12:00:01Z..2021-08-15T18:00:00Z page=1',
+      'topic:x is:public created:2021-08-15T18:00:01Z..2026-07-01T00:00:00Z page=1',
+      'topic:x is:public created:2021-08-15T18:00:01Z..2024-01-22T21:00:00Z page=1',
+      'topic:x is:public created:2024-01-22T21:00:01Z..2026-07-01T00:00:00Z page=1',
     ]);
   });
 
-  it('should keep a single entry when a repository is returned twice', async () => {
-    const pages = [{ items: [searchItem('a', 'r1'), searchItem('b', 'r2')] }, { items: [searchItem('b', 'r2')] }];
+  it('should split a two-second slice over the cap into two single-second slices', async () => {
+    const queries = [];
+    const fetchFn = async (url) => {
+      const query = new URL(url).searchParams.get('q');
+      queries.push(query);
+      const twoSeconds = query.endsWith('2007-01-01T00:00:00Z..2007-01-01T00:00:01Z');
+      return new Response(JSON.stringify({ total_count: twoSeconds ? 3 : 1, items: [searchItem('a', 'r1')] }));
+    };
+    const warnings = [];
+    await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn,
+      perPage: 2,
+      maxResults: 2,
+      logger: { warn: (message) => warnings.push(message) },
+      nowFn: () => Date.UTC(2007, 0, 1, 0, 0, 1),
+    });
+    expect(queries).to.deep.equal([
+      'topic:x is:public created:2007-01-01T00:00:00Z..2007-01-01T00:00:01Z',
+      'topic:x is:public created:2007-01-01T00:00:00Z..2007-01-01T00:00:00Z',
+      'topic:x is:public created:2007-01-01T00:00:01Z..2007-01-01T00:00:01Z',
+    ]);
+    expect(warnings).to.deep.equal([]);
+  });
+
+  it('should paginate a slice again when a page drifted, keeping a single entry per repository', async () => {
+    // b/r2 is updated between the two page requests of the first pass: it
+    // moves to the front, c/r3 is pushed to page 3 and the pass misses it.
+    const pages = [
+      { total_count: 3, items: [searchItem('a', 'r1'), searchItem('b', 'r2')] },
+      { total_count: 3, items: [searchItem('b', 'r2')] },
+      { total_count: 3, items: [searchItem('b', 'r2'), searchItem('a', 'r1')] },
+      { total_count: 3, items: [searchItem('c', 'r3')] },
+    ];
+    const warnings = [];
     const fetchFn = async () => new Response(JSON.stringify(pages.shift()));
-    const repositories = await searchRepositoriesByTopic({ topic: 'x', fetchFn, perPage: 2 });
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn,
+      perPage: 2,
+      logger: { warn: (message) => warnings.push(message) },
+    });
+    expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['a/r1', 'b/r2', 'c/r3']);
+    expect(pages).to.deep.equal([]);
+    expect(warnings).to.have.lengthOf(1);
+    expect(warnings[0]).to.include('drifted while paginated (2/3 collected), crawling it again (pass 1/3)');
+  });
+
+  it('should give up on a slice that keeps drifting, with a warning', async () => {
+    const warnings = [];
+    let requests = 0;
+    const fetchFn = async (url) => {
+      requests += 1;
+      const page = new URL(url).searchParams.get('page');
+      const items = page === '1' ? [searchItem('a', 'r1'), searchItem('b', 'r2')] : [searchItem('b', 'r2')];
+      return new Response(JSON.stringify({ total_count: 3, items }));
+    };
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn,
+      perPage: 2,
+      logger: { warn: (message) => warnings.push(message) },
+    });
     expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['a/r1', 'b/r2']);
+    expect(requests).to.equal(6);
+    expect(warnings).to.have.lengthOf(3);
+    expect(warnings[2]).to.include('still incomplete after 3 passes (2/3 collected)');
+  });
+
+  it('should retry a page flagged incomplete after a delay, then accept it', async () => {
+    const sleeps = [];
+    const warnings = [];
+    const responses = [
+      new Response(JSON.stringify({ total_count: 0, incomplete_results: true, items: [] })),
+      new Response(JSON.stringify({ total_count: 1, incomplete_results: false, items: [searchItem('a', 'r1')] })),
+    ];
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn: async () => responses.shift(),
+      logger: { warn: (message) => warnings.push(message) },
+      sleepFn: (ms) => sleeps.push(ms),
+    });
+    expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['a/r1']);
+    expect(sleeps).to.deep.equal([10000]);
+    expect(warnings).to.have.lengthOf(1);
+    expect(warnings[0]).to.include('incomplete results');
+  });
+
+  it('should use a page still flagged incomplete once the retries are exhausted', async () => {
+    const sleeps = [];
+    const fetchFn = async () =>
+      new Response(JSON.stringify({ total_count: 1, incomplete_results: true, items: [searchItem('a', 'r1')] }));
+    const repositories = await searchRepositoriesByTopic({
+      topic: 'x',
+      fetchFn,
+      logger: silentLogger,
+      sleepFn: (ms) => sleeps.push(ms),
+    });
+    expect(repositories.map((r) => r.storeSlug)).to.deep.equal(['a/r1']);
+    expect(sleeps).to.deep.equal([10000, 10000]);
   });
 
   it('should stop and warn when the search API cap is reached on a slice too narrow to split', async () => {
@@ -156,14 +254,14 @@ describe('searchRepositoriesByTopic', () => {
       perPage: 2,
       maxResults: 2,
       logger: { warn: (message) => warnings.push(message) },
-      // one second after the floor of the range: a 1-second slice
-      nowFn: () => Date.UTC(2008, 0, 1, 0, 0, 1),
+      // the floor of the range itself: a single-second slice
+      nowFn: () => Date.UTC(2007, 0, 1),
     });
     expect(repositories).to.have.lengthOf(2);
-    expect(queries).to.deep.equal(['topic:x is:public created:2008-01-01T00:00:00Z..2008-01-01T00:00:01Z']);
+    expect(queries).to.deep.equal(['topic:x is:public created:2007-01-01T00:00:00Z..2007-01-01T00:00:00Z']);
     expect(warnings).to.have.lengthOf(1);
     expect(warnings[0]).to.include('cap reached');
-    expect(warnings[0]).to.include('2008-01-01T00:00:00Z..2008-01-01T00:00:01Z');
+    expect(warnings[0]).to.include('2007-01-01T00:00:00Z..2007-01-01T00:00:00Z');
   });
 
   it('should throw when the search request fails', async () => {
@@ -192,7 +290,7 @@ describe('searchRepositoriesByTopic', () => {
     const sleeps = [];
     const responses = [
       new Response('rate limited', { status: 403, headers: { 'retry-after': '7', 'x-ratelimit-remaining': '0' } }),
-      new Response(JSON.stringify({ items: [searchItem('john', 'demo')] })),
+      new Response(JSON.stringify({ total_count: 1, items: [searchItem('john', 'demo')] })),
     ];
     const repositories = await searchRepositoriesByTopic({
       topic: 'x',
@@ -208,7 +306,7 @@ describe('searchRepositoriesByTopic', () => {
     const sleeps = [];
     const responses = [
       new Response('rate limited', { status: 429, headers: { 'retry-after': '3600' } }),
-      new Response(JSON.stringify({ items: [] })),
+      new Response(JSON.stringify({ total_count: 0, items: [] })),
     ];
     await searchRepositoriesByTopic({
       topic: 'x',
@@ -226,7 +324,7 @@ describe('searchRepositoriesByTopic', () => {
         status: 403,
         headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1030' },
       }),
-      new Response(JSON.stringify({ items: [] })),
+      new Response(JSON.stringify({ total_count: 0, items: [] })),
     ];
     await searchRepositoriesByTopic({
       topic: 'x',
@@ -245,7 +343,7 @@ describe('searchRepositoriesByTopic', () => {
         status: 403,
         headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '900' },
       }),
-      new Response(JSON.stringify({ items: [] })),
+      new Response(JSON.stringify({ total_count: 0, items: [] })),
     ];
     await searchRepositoriesByTopic({
       topic: 'x',
@@ -260,7 +358,7 @@ describe('searchRepositoriesByTopic', () => {
   it('should retry with the default sleep and clock when none are injected', async () => {
     const responses = [
       new Response('rate limited', { status: 429, headers: { 'retry-after': '0.001' } }),
-      new Response(JSON.stringify({ items: [] })),
+      new Response(JSON.stringify({ total_count: 0, items: [] })),
     ];
     const repositories = await searchRepositoriesByTopic({
       topic: 'x',

@@ -18,15 +18,22 @@ const USER_AGENT = 'gladys-integration-store-indexer';
 // date never changes, so the slices are disjoint and together cover the
 // whole topic — no integration is left behind.
 const SEARCH_MAX_RESULTS = 1000;
-// Lower bound of the creation-date slicing: no public repository predates it.
-const SEARCH_CREATED_FLOOR_MS = Date.UTC(2008, 0, 1);
-// Granularity of the `created:` qualifier: one second. A slice this narrow
-// cannot be split further (only matters if more than SEARCH_MAX_RESULTS
-// tagged repositories were created in the very same second).
+// Lower bound of the creation-date slicing: GitHub's oldest repositories date
+// from October 2007, no public repository predates this.
+const SEARCH_CREATED_FLOOR_MS = Date.UTC(2007, 0, 1);
+// Granularity of the `created:` qualifier: one second. A slice reduced to a
+// single second cannot be split further (only matters if more than
+// SEARCH_MAX_RESULTS tagged repositories were created in that very second).
 const SEARCH_SLICE_STEP_MS = 1000;
 // The search API has its own strict rate limit (~30 requests/minute): a
 // transient hit is retried with a bounded backoff instead of failing the run.
+// Same bound for a page flagged `incomplete_results` (the search timed out
+// server-side and its total_count is unreliable), retried after a delay.
 const SEARCH_MAX_ATTEMPTS = 3;
+// A slice is paginated again when it ends up with fewer repositories than
+// its total_count (a page drifted while it was paginated), up to this many
+// passes before giving up with a warning.
+const SLICE_MAX_PASSES = 3;
 const RATE_LIMIT_DEFAULT_DELAY_MS = 10 * 1000;
 const RATE_LIMIT_MAX_DELAY_MS = 60 * 1000;
 
@@ -156,7 +163,7 @@ export async function searchRepositoriesByTopic({
 }) {
   /**
    * Fetch one page of a search query, retrying a rate-limited response with
-   * a bounded backoff.
+   * a bounded backoff, and a page flagged incomplete after a short delay.
    * @param {string} query - Search query (qualifiers).
    * @param {number} page - Page number (1-based).
    * @returns {Promise<{total_count: number, items: object[]}>} Search API body.
@@ -164,10 +171,11 @@ export async function searchRepositoriesByTopic({
   async function fetchSearchPage(query, page) {
     // An explicit sort: the default "best match" order is not guaranteed
     // stable from one page request to the next, and an unstable order
-    // repeats some repositories across pages while skipping others.
-    // Newest update first: a repository updated during the crawl moves to
-    // the front and shifts the others later, so at worst a page is seen
-    // twice (deduplicated below), never skipped.
+    // repeats some repositories across pages while skipping others. Newest
+    // update first: a repository updated while its slice is paginated moves
+    // to the front, so only that repository can be missed (it jumps to a
+    // page already fetched), and the others, shifted later, are at worst
+    // seen twice. crawlSlice detects the miss and paginates the slice again.
     const url =
       `${GITHUB_API_BASE_URL}/search/repositories?q=${encodeURIComponent(query)}` +
       `&sort=updated&order=desc&per_page=${perPage}&page=${page}`;
@@ -178,7 +186,17 @@ export async function searchRepositoriesByTopic({
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (response.ok) {
-        return response.json();
+        const body = await response.json();
+        if (!body.incomplete_results || attempt >= SEARCH_MAX_ATTEMPTS) {
+          return body;
+        }
+        logger.warn(
+          `GitHub search returned incomplete results (search timed out), retrying in ${RATE_LIMIT_DEFAULT_DELAY_MS / 1000}s` +
+            ` (attempt ${attempt}/${SEARCH_MAX_ATTEMPTS})...`,
+        );
+        await sleepFn(RATE_LIMIT_DEFAULT_DELAY_MS);
+        attempt += 1;
+        continue;
       }
       if (!isRateLimited(response) || attempt >= SEARCH_MAX_ATTEMPTS) {
         throw new Error(`GitHub repository search failed (HTTP ${response.status})`);
@@ -194,31 +212,67 @@ export async function searchRepositoriesByTopic({
   }
 
   // Keyed by full name: a repository can only be created once, so the slices
-  // never overlap — the map absorbs a page drifting while the crawl
-  // paginates (a repository updated or tagged mid-run shifting the others).
+  // never overlap — the map absorbs a repository seen twice when a page
+  // drifts while its slice is paginated.
   const repositories = new Map();
 
   /**
    * Crawl every tagged repository created within [fromMs, toMs] (inclusive,
    * second-aligned bounds), splitting the slice when it exceeds the cap.
+   * A slice that ends up with fewer repositories than its total_count (a
+   * page drifted while it was paginated) is paginated again, a few times.
    * @param {number} fromMs - Start of the slice, epoch milliseconds.
    * @param {number} toMs - End of the slice, epoch milliseconds.
    * @returns {Promise<void>} Resolves once the slice is fully collected.
    */
   async function crawlSlice(fromMs, toMs) {
-    const query = `topic:${topic} is:public created:${searchTimestamp(fromMs)}..${searchTimestamp(toMs)}`;
-    let page = 1;
-    let body = await fetchSearchPage(query, page);
-    if (body.total_count > maxResults && toMs - fromMs >= 2 * SEARCH_SLICE_STEP_MS) {
-      // Split at a second boundary: [from, mid] and [mid + 1 s, to] are both
-      // non-empty and disjoint.
-      const midMs = fromMs + Math.floor((toMs - fromMs) / (2 * SEARCH_SLICE_STEP_MS)) * SEARCH_SLICE_STEP_MS;
-      await crawlSlice(fromMs, midMs);
-      await crawlSlice(midMs + SEARCH_SLICE_STEP_MS, toMs);
-      return;
+    const range = `${searchTimestamp(fromMs)}..${searchTimestamp(toMs)}`;
+    const query = `topic:${topic} is:public created:${range}`;
+    let pass = 1;
+    for (;;) {
+      const body = await fetchSearchPage(query, 1);
+      if (body.total_count > maxResults && toMs > fromMs) {
+        // Split at a second boundary: [from, mid] and [mid + 1 s, to] are
+        // both non-empty and disjoint.
+        const midMs = fromMs + Math.floor((toMs - fromMs) / (2 * SEARCH_SLICE_STEP_MS)) * SEARCH_SLICE_STEP_MS;
+        await crawlSlice(fromMs, midMs);
+        await crawlSlice(midMs + SEARCH_SLICE_STEP_MS, toMs);
+        return;
+      }
+      const collected = await paginateSlice(query, body, range);
+      if (collected === null || collected >= body.total_count) {
+        return;
+      }
+      if (pass >= SLICE_MAX_PASSES) {
+        logger.warn(
+          `GitHub search slice ${range} still incomplete after ${pass} passes (${collected}/${body.total_count} collected):` +
+            ' some integrations may be missing from the index.',
+        );
+        return;
+      }
+      logger.warn(
+        `GitHub search slice ${range} drifted while paginated (${collected}/${body.total_count} collected), ` +
+          `crawling it again (pass ${pass}/${SLICE_MAX_PASSES})...`,
+      );
+      pass += 1;
     }
+  }
+
+  /**
+   * Collect every page of a slice known to fit in the cap, starting from its
+   * already fetched first page.
+   * @param {string} query - Search query of the slice.
+   * @param {{total_count: number, items: object[]}} firstPage - Body of page 1.
+   * @param {string} range - Creation-date range of the slice, for the logs.
+   * @returns {Promise<number|null>} Number of distinct repositories collected, or null when the cap cut the slice short.
+   */
+  async function paginateSlice(query, firstPage, range) {
+    const collected = new Set();
+    let page = 1;
+    let body = firstPage;
     for (;;) {
       for (const item of body.items) {
+        collected.add(item.full_name);
         repositories.set(item.full_name, {
           storeSlug: item.full_name,
           owner: item.owner.login,
@@ -236,14 +290,14 @@ export async function searchRepositoriesByTopic({
         });
       }
       if (body.items.length < perPage || page * perPage >= body.total_count) {
-        return;
+        return collected.size;
       }
       if (page * perPage >= maxResults) {
         logger.warn(
-          `GitHub search API cap reached (${maxResults} results) on an unsplittable slice ` +
-            `(${searchTimestamp(fromMs)}..${searchTimestamp(toMs)}): some integrations may be missing from the index.`,
+          `GitHub search API cap reached (${maxResults} results) on an unsplittable slice (${range}):` +
+            ' some integrations may be missing from the index.',
         );
-        return;
+        return null;
       }
       page += 1;
       body = await fetchSearchPage(query, page);
