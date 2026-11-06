@@ -6,6 +6,7 @@ import semver from 'semver';
 
 import {
   CAPABILITY_MANIFEST_FIELDS,
+  CONFIG_FIELD_KEY_MIN_GLADYS_VERSION,
   CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION,
   KEYWORD_MIN_LENGTH,
   MANIFEST_FIELD_MIN_GLADYS_VERSION,
@@ -144,6 +145,44 @@ function validateConfigFieldDefault(field, path) {
   }
 }
 
+// Types a `visible_if` condition may reference: their possible values are
+// known from the manifest itself, so every listed value can be checked.
+const VISIBLE_IF_FIELD_TYPES = ['select', 'multi_select', 'boolean'];
+
+/**
+ * Validate the `visible_if` condition of a config field, beyond the shape the
+ * schema already checked (contracts/manifest.md, C.1): `field` is the key of
+ * an EARLIER field of the same list (no forward reference, hence no cycle; a
+ * `section` is never referenced), that field is a boolean or a select /
+ * multi_select with static options (a dynamic `source` is only known at
+ * runtime), and every value of `in` is one of its values.
+ * @param {object} field - Schema-validated config field.
+ * @param {string} path - Dotted path of the field, for error messages.
+ * @param {Map<string, object>} earlierFields - The earlier value fields of the list, by key.
+ * @returns {string[]} Reasons, empty when valid.
+ */
+function validateVisibleIf(field, path, earlierFields) {
+  if (field.visible_if === undefined) {
+    return [];
+  }
+  const condition = field.visible_if;
+  const referenced = earlierFields.get(condition.field);
+  if (referenced === undefined) {
+    return [`${path}.visible_if.field: must be the key of an earlier field of the same list`];
+  }
+  if (!VISIBLE_IF_FIELD_TYPES.includes(referenced.type) || referenced.source !== undefined) {
+    return [
+      `${path}.visible_if.field: "${condition.field}" must be a boolean, or a select or multi_select with static options`,
+    ];
+  }
+  const allowed = referenced.type === 'boolean' ? [true, false] : referenced.options.map((option) => option.value);
+  return condition.in
+    .map((value, valueIndex) =>
+      allowed.includes(value) ? null : `${path}.visible_if.in.${valueIndex}: must be a value of "${condition.field}"`,
+    )
+    .filter((reason) => reason !== null);
+}
+
 /**
  * Run a callback on every {{port:<name>}} placeholder of a multi-language text,
  * with the referenced port name and the language it sits in.
@@ -206,6 +245,7 @@ function validateSectionPortPlaceholders(field, path, context) {
 function validateConfigSchemaRules(configSchema, basePath, context) {
   const errors = [];
   const seenKeys = new Set();
+  const earlierFields = new Map();
   configSchema.forEach((field, i) => {
     const path = `${basePath}.${i}`;
     if (seenKeys.has(field.key)) {
@@ -213,6 +253,10 @@ function validateConfigSchemaRules(configSchema, basePath, context) {
     }
     seenKeys.add(field.key);
     errors.push(...validateConfigFieldDefault(field, path));
+    errors.push(...validateVisibleIf(field, path, earlierFields));
+    if (field.type !== 'section') {
+      earlierFields.set(field.key, field);
+    }
     if (field.min !== undefined && field.max !== undefined && field.min > field.max) {
       errors.push(`${path}.min: must be lower than or equal to max`);
     }
@@ -497,7 +541,16 @@ function validateGladysVersionGates(manifest) {
       );
     }
   });
-  const declaredSources = new Set(collectConfigFields(manifest).map((field) => field.source));
+  const configFields = collectConfigFields(manifest);
+  Object.entries(CONFIG_FIELD_KEY_MIN_GLADYS_VERSION).forEach(([key, keyMinimum]) => {
+    if (configFields.some((field) => field[key] !== undefined) && !satisfies(keyMinimum)) {
+      errors.push(
+        `manifest.gladys_version: declaring ${key} on a form field requires ">=${keyMinimum}" at minimum` +
+          ` (older Gladys releases reject a field key they do not know)`,
+      );
+    }
+  });
+  const declaredSources = new Set(configFields.map((field) => field.source));
   Object.entries(CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION).forEach(([source, sourceMinimum]) => {
     if (declaredSources.has(source) && !satisfies(sourceMinimum)) {
       errors.push(

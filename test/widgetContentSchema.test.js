@@ -246,6 +246,14 @@ describe('widget-content.schema.json', () => {
       expect(accepts(button([field({ label: 'Bags' })]))).to.equal(false);
     });
 
+    it('should accept a visible_if condition of the manifest shape, and refuse a malformed one', () => {
+      const paid = { key: 'paid', type: 'boolean', label: { en: 'Paid' } };
+      expect(accepts(button([paid, field({ visible_if: { field: 'paid', in: [true] } })]))).to.equal(true);
+      expect(accepts(button([paid, field({ visible_if: 'paid' })]))).to.equal(false);
+      expect(accepts(button([paid, field({ visible_if: { field: 'paid', in: [] } })]))).to.equal(false);
+      expect(accepts(button([paid, field({ visible_if: { field: 'paid', in: [true], not: 1 } })]))).to.equal(false);
+    });
+
     it('should refuse a dynamic source: the options are written in the content', () => {
       expect(accepts(button([field({ type: 'select', source: 'devices' })]))).to.equal(false);
       expect(accepts(button([field({ type: 'select' })]))).to.equal(false);
