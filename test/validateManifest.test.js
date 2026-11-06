@@ -2172,6 +2172,109 @@ describe('validateManifest', () => {
     });
   });
 
+  describe('visible_if', () => {
+    const mode = {
+      key: 'mode',
+      type: 'select',
+      label: { en: 'Mode' },
+      default: 'local',
+      options: [
+        { value: 'local', label: { en: 'Local' } },
+        { value: 'cloud', label: { en: 'Cloud' } },
+      ],
+    };
+    const conditional = (key, condition) => ({ key, type: 'string', label: { en: key }, visible_if: condition });
+    const withConfig = (fields) => {
+      const manifest = buildManifest();
+      manifest.gladys_version = '>=5.4.0';
+      manifest.config_schema = fields;
+      return manifest;
+    };
+
+    it('should accept a condition on an earlier select, multi_select or boolean, in every form', () => {
+      const manifest = buildProviderManifest();
+      manifest.gladys_version = '>=5.4.0';
+      const tls = { key: 'tls', type: 'boolean', label: { en: 'TLS' } };
+      const zones = { key: 'zones', type: 'multi_select', label: { en: 'Zones' }, options: mode.options };
+      manifest.config_schema = [
+        mode,
+        conditional('host', { field: 'mode', in: ['local'] }),
+        tls,
+        conditional('ca', { field: 'tls', in: [true] }),
+        { key: 'intro', type: 'section', label: { en: 'Cloud' }, visible_if: { field: 'mode', in: ['cloud'] } },
+        zones,
+        conditional('detail', { field: 'zones', in: ['cloud'] }),
+      ];
+      manifest.actions = [
+        { key: 'run', label: { en: 'Run' }, fields: [mode, conditional('host', { field: 'mode', in: ['cloud'] })] },
+      ];
+      manifest.widgets[1].settings.push(tls, conditional('ca', { field: 'tls', in: [false] }));
+      manifest.scene_actions[0].fields.push(mode, conditional('host', { field: 'mode', in: ['local', 'cloud'] }));
+      expect(validateManifest(manifest)).to.deep.equal({ valid: true, errors: [] });
+    });
+
+    it('should reject a malformed condition at the schema level', () => {
+      ['local', { field: 'mode' }, { field: 'mode', in: [] }, { field: 'mode', in: ['local'], not: 1 }].forEach(
+        (condition) => {
+          const result = validateManifest(withConfig([mode, conditional('host', condition)]));
+          expect(result.valid, JSON.stringify(condition)).to.equal(false);
+          expect(result.errors.join(' ')).to.include('manifest.config_schema.1.visible_if');
+        },
+      );
+    });
+
+    it('should reject a later, unknown, section, free-text or dynamic-source reference', () => {
+      const result = validateManifest(
+        withConfig([
+          conditional('early', { field: 'mode', in: ['local'] }),
+          mode,
+          conditional('ghost', { field: 'nope', in: ['local'] }),
+          { key: 'intro', type: 'section', label: { en: 'Intro' } },
+          conditional('after_section', { field: 'intro', in: ['local'] }),
+          { key: 'host', type: 'string', label: { en: 'Host' } },
+          conditional('after_host', { field: 'host', in: ['local'] }),
+          { key: 'device', type: 'select', source: 'devices', label: { en: 'Device' } },
+          conditional('after_device', { field: 'device', in: ['local'] }),
+        ]),
+      );
+      expect(result.errors).to.deep.equal([
+        'manifest.config_schema.0.visible_if.field: must be the key of an earlier field of the same list',
+        'manifest.config_schema.2.visible_if.field: must be the key of an earlier field of the same list',
+        'manifest.config_schema.4.visible_if.field: must be the key of an earlier field of the same list',
+        'manifest.config_schema.6.visible_if.field: "host" must be a boolean, or a select or multi_select with static options',
+        'manifest.config_schema.8.visible_if.field: "device" must be a boolean, or a select or multi_select with static options',
+      ]);
+    });
+
+    it('should reject a value outside the referenced field values', () => {
+      const tls = { key: 'tls', type: 'boolean', label: { en: 'TLS' } };
+      const result = validateManifest(
+        withConfig([
+          mode,
+          conditional('host', { field: 'mode', in: ['local', 'remote'] }),
+          tls,
+          conditional('ca', { field: 'tls', in: ['true'] }),
+        ]),
+      );
+      expect(result.errors).to.deep.equal([
+        'manifest.config_schema.1.visible_if.in.1: must be a value of "mode"',
+        'manifest.config_schema.3.visible_if.in.0: must be a value of "tls"',
+      ]);
+    });
+
+    it('should reject visible_if on a gladys_version range older Gladys releases satisfy', () => {
+      const manifest = withConfig([mode, conditional('host', { field: 'mode', in: ['local'] })]);
+      manifest.gladys_version = '>=5.3.0';
+      expect(validateManifest(manifest)).to.deep.equal({
+        valid: false,
+        errors: [
+          'manifest.gladys_version: declaring visible_if on a form field requires ">=5.4.0" at minimum' +
+            ' (older Gladys releases reject a field key they do not know)',
+        ],
+      });
+    });
+  });
+
   describe('energy_contracts', () => {
     const energyManifest = JSON.parse(
       readFileSync(new URL('./fixtures/energy-manifest.json', import.meta.url), 'utf8'),

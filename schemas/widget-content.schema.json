@@ -1176,6 +1176,25 @@
           "type": "string",
           "enum": ["dropdown", "radio"],
           "description": "Rendering of a `select` field: dropdown (default) or radio buttons."
+        },
+        "visible_if": {
+          "type": "object",
+          "description": "Optional display condition, the manifest `visible_if` grammar: the field is shown, and only then required, validated and relayed in `values`, when the referenced field holds one of the listed values and is itself visible. Checked by the core with the manifest's own condition validator: `field` is the key of an EARLIER field of the action, a `boolean` or a `select`, and every value of `in` is one of its values; an invalid condition drops the button. An older core drops the button on this unknown key: an integration using it declares the matching `gladys_version` minimum (5.4.0).",
+          "additionalProperties": false,
+          "required": ["field", "in"],
+          "properties": {
+            "field": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]+$"
+            },
+            "in": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": ["string", "boolean"]
+              }
+            }
+          }
         }
       },
       "allOf": [

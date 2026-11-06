@@ -144,6 +144,13 @@ export const CONFIG_FIELD_SOURCE_MIN_GLADYS_VERSION = {
   // the houses of Gladys, by selector
   houses: '5.2.0',
 };
+// Same gate for the keys of a form field added after the first release, in
+// any form: an older core rejects an unknown field key with "unknown field".
+export const CONFIG_FIELD_KEY_MIN_GLADYS_VERSION = {
+  // display condition on an earlier field of the same form (C.1, the
+  // `visible_if` paragraph of contracts/manifest.md)
+  visible_if: '5.4.0',
+};
 
 // The capability fields (capabilities/provider-type.md): contracts the core
 // does not consume through a dedicated interface, declarable by every type on
